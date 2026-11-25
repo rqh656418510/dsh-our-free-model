@@ -15,10 +15,6 @@ let checks = 0
 const check = async (name, action) => { await action(); checks++; console.log(`ok ${name}`) }
 try {
   const context = await browser.newContext()
-  await context.addInitScript(() => {
-    const now = new Date()
-    localStorage.setItem('ofm.sponsor.last-shown.v1', `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
-  })
   const page = await context.newPage()
   page.on('pageerror', error => errors.push(error.message))
   await page.goto(address)
@@ -29,8 +25,6 @@ try {
     await page.locator('#login-form button[type=submit]').click()
   }
   const nav = async name => {
-    const advertisement = page.locator('dialog.ofm-sponsor[open]')
-    if (await advertisement.count()) await advertisement.getByRole('button', { name: /收起|关闭/ }).first().click()
     await page.getByRole('navigation', { name: '管理导航' }).getByRole('button', { name, exact: true }).click()
   }
   const api = async (endpoint, body) => page.evaluate(async ({ endpoint, body }) => {

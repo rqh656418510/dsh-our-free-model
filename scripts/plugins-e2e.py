@@ -86,11 +86,6 @@ try:
             page.get_by_role('button', name='我已阅读并了解').click(timeout=8_000)
         except Exception:
             pass
-        # The sponsor notice opens once per day on first visit; collapse it.
-        try:
-            page.locator('.ofm-sponsor-close').click(timeout=8_000)
-        except Exception:
-            pass
         page.wait_for_timeout(300)
         screenshot(page, '01-console.png')
 

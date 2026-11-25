@@ -65,9 +65,6 @@ try {
   await page.waitForFunction(() => document.querySelector('nav.console-nav'))
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  const sponsor = page.locator('dialog.ofm-sponsor[open]')
-  await page.waitForTimeout(1000)
-  if (await sponsor.count()) { await sponsor.getByRole('button', { name: /收起/ }).first().click(); await sponsor.waitFor({ state: 'hidden' }) }
   const nav = name => page.getByRole('navigation', { name: '管理导航' }).getByRole('button', { name, exact: true }).click()
   await nav('客户端与订阅')
   await page.locator('.wb-client').first().waitFor()

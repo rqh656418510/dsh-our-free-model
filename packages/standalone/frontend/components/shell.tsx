@@ -1,4 +1,4 @@
-import { Coffee, Activity, BarChart3, BookOpen, Boxes, Cable, ChevronRight, Globe, Handshake, Image, LayoutDashboard, LogOut, MessageSquareWarning, Moon, Network, Palette, PanelsTopLeft, Puzzle, Route, RotateCw, Settings2, ShieldCheck, Sparkles, Sun, Terminal, Monitor, LibraryBig, Wrench, Waves } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Boxes, Cable, ChevronRight, Globe, Handshake, Image, LayoutDashboard, LogOut, MessageSquareWarning, Moon, Network, Palette, PanelsTopLeft, Puzzle, Route, RotateCw, Settings2, ShieldCheck, Sparkles, Sun, Terminal, Monitor, LibraryBig, Wrench, Waves } from 'lucide-react'
 import { useEffect, useState, useRef } from 'react'
 import type { ComponentType } from 'react'
 import { flushSync } from 'react-dom'
@@ -36,7 +36,6 @@ const CORE_NAVIGATION: NavGroup[] = [
   ] },
   { label: '项目支持', items: [
     { id: 'feedback', name: '反馈与许愿', icon: MessageSquareWarning },
-    { id: 'sponsor', name: '来自赞助商的广告', icon: Coffee },
   ] },
 ]
 
@@ -182,7 +181,7 @@ export function Sidebar({ page, summary, host, onDisclaimer, pluginPages = [] }:
     </div>
     <nav className="console-nav" aria-label="管理导航" ref={navRef}>{groups.map(group => <div className="nav-group" key={group.label}>
       <span className="nav-group-label">{group.label}</span>
-      {group.items.filter(item => item.id !== 'updates' || hasDesktopBridge()).map(item => <button key={item.id} id={item.id === 'sponsor' ? 'ofm-sponsor-menu-desktop' : undefined} className={`console-nav-item ${item.id === 'sponsor' ? 'ofm-sponsor-nav' : ''} ${page === item.id ? 'selected' : ''}`}
+      {group.items.filter(item => item.id !== 'updates' || hasDesktopBridge()).map(item => <button key={item.id} className={`console-nav-item ${page === item.id ? 'selected' : ''}`}
         aria-current={page === item.id ? 'page' : undefined} onClick={() => host.navigate(item.id)}>
         <span className="console-nav-indicator" aria-hidden="true" />
         <item.icon size={16} strokeWidth={1.7} /><span>{item.name}</span>

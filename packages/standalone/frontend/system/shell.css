@@ -268,8 +268,6 @@ button { font: inherit; color: inherit; }
 }
 .console-nav-item.selected .count-badge { background: var(--accent); color: var(--accent-ink); }
 
-.ofm-sponsor-nav { color: var(--fg-2); }
-
 /* 侧边栏底部：支持卡 + 状态/主题/退出 */
 .sidebar-support {
   display: flex;

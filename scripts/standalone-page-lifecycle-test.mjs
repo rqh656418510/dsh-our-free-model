@@ -32,7 +32,7 @@ const settings = { enabled: true }
 const summary = { settings, catalog: [], networkMode: 'fixture', plugins: { installedCount: 0, builtinCount: 0, pages: [], developerPlugins: false } }
 const context = {
   ...react, h: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }), Fragment: 'fragment',
-  Sidebar: 'Sidebar', Topbar: 'Topbar', SponsorNotice: 'SponsorNotice', Overview: 'Overview', Workspace: 'Workspace', Connection: 'Connection', ChannelMount: 'ChannelMount', LazyPage: 'LazyPage', LoadingScreen: 'LoadingScreen', LoginScreen: 'LoginScreen', AlertCircle: 'AlertCircle', DisclaimerDialog: 'DisclaimerDialog',
+  Sidebar: 'Sidebar', Topbar: 'Topbar', Overview: 'Overview', Workspace: 'Workspace', Connection: 'Connection', ChannelMount: 'ChannelMount', LazyPage: 'LazyPage', LoadingScreen: 'LoadingScreen', LoginScreen: 'LoginScreen', AlertCircle: 'AlertCircle', DisclaimerDialog: 'DisclaimerDialog',
   Plugins: 'Plugins', PluginPage: 'PluginPage',
   // `App` navigates against `pageIdsFor(pluginPages)`, the single whitelist that
   // concatenates the core sidebar with the plugin pages from `/summary`. The

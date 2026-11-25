@@ -55,7 +55,7 @@
 - **The upstreams are named** — the free lane is OpenCode's Zen gateway at `https://opencode.ai`, and the Kilo channel is Kilo AI's public gateway at `https://kilo.ai`; both are dialled directly, with no third party relaying your traffic. Who serves your requests, and where your data goes, is spelled out in [Where the models come from](#where-the-models-come-from) and the [Disclaimer](#disclaimer).
 - **A roster that tracks upstream** — model set, context length and capabilities are re-fetched on every refresh rather than frozen into the plugin.
 - **The picker offers only what actually answers** — a model the upstream listing names but the gateway refuses to route outright (`Model is unavailable`, a 404 for that id) leaves the dropdown and stays visible in the settings page with its refusal recorded. Everything that is *not* a statement about the model keeps its model reachable: a 5xx from the gateway, a 429 quota window, a timeout or a dropped connection. Region-gated ones move to their own `region-limited` group. If a whole round refuses everything, nothing is hidden: the picker never goes empty.
-- **Announcement center with live push** — the repository owner edits one JSON file and pushes; every installation receives it within one poll cycle. Bodies are HTML rendered through a strict allowlist; `urgent` items open a full-screen modal; optional OS-level notifications.
+- **Announcement center with live push** — the repository owner edits one JSON file and pushes; every installation receives it within one poll cycle. Bodies are HTML rendered through a strict allowlist; `urgent` items raise a highlighted toast instead of a modal; optional OS-level notifications.
 - **In-app upgrades** — one click in the settings page: download → SHA-256 verification → backup → atomic replace → read-back verification → hot reload, with automatic rollback if any step fails.
 - **Hot reload** — upgrades and code changes take effect immediately, no app restart; also available as a manual button and an optional file watcher.
 - **Region-aware, per egress** — models gated by geography are separated into their own `region-limited` group instead of failing mid-turn. Switch your network exit and the next probe reclassifies them automatically.
@@ -357,7 +357,7 @@ between the two groups on its own.
 **Receive announcements.** Everything is automatic: after the owner pushes, a
 running installation picks the item up within one poll cycle (30 minutes by
 default, or immediately via *Check for new announcements*). Regular items raise
-a toast, `urgent` items open a full-screen modal, and both land in the
+a toast, `urgent` items raise a highlighted toast rather than a modal, and both land in the
 announcement center with an unread marker. Enable *OS notifications* there to
 also get system-level toasts.
 
@@ -686,7 +686,7 @@ browser and inside the DSHEAC AIO desktop window:
 | Real harness conversation | One real turn completed and answered in both dsh web and the AIO desktop window |
 | Announcement feed | New items pushed on a local "repository server" arrived within one poll cycle on both surfaces |
 | Announcement center UI | 4 items rendered (bold/code/links/lists), urgency badge, unread dots, mark-read single/all |
-| Urgent announcement | An `urgent` push opened the full-screen modal; acknowledging persisted |
+| Urgent announcement | An `urgent` push raises a highlighted toast, never a modal; it still lands in the center with its unread marker |
 | Toast + OS notifications | Live toast on arrival; the desktop `window.Notification` channel exists (when the WebView2 permission policy denies the request, the UI says so) |
 | In-app upgrade | 1.1.0 → 1.1.2 completed on both dsh web and AIO: 23 files downloaded, SHA-256 verified, backed up, replaced, hot-reloaded; `/meta` reported the new version immediately |
 | Upgrade safety | A hash mismatch discards staging, leaves the installed package untouched and logs the failure; upgraded artifacts pass the EAC gate and a full restart |

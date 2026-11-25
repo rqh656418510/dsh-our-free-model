@@ -140,9 +140,11 @@ function parseItem(row, now) {
     && /^https?:\/\//i.test(row.link.url)) {
     link = { url: row.link.url, label: typeof row.link.label === 'string' ? row.link.label.slice(0, 100) : '' }
   }
-  // `holdSeconds` asks the client to keep the modal's close control locked for
-  // a few seconds so the body is actually read (0/absent closes immediately).
-  // The ceiling keeps an owner from writing "hold for a week".
+  // `holdSeconds` asked clients to keep the urgent modal's close control locked
+  // for a few seconds so the body was actually read (0/absent closes at once).
+  // It stays normalised for clients that still render it; this plugin's own
+  // client no longer opens a modal. The ceiling keeps an owner from writing
+  // "hold for a week".
   const holdSeconds = row.holdSeconds
   const hold = Number.isInteger(holdSeconds) && holdSeconds >= 0 && holdSeconds <= 30 ? holdSeconds : 0
   return {

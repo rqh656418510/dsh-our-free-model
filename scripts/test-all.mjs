@@ -47,7 +47,6 @@ const suites = [
   // ships a package whose two halves mount under different names (#725/#835).
   ['scoped-publish', 'scoped-publish-test.mjs', []],
   ['client-lint', 'client-lint.mjs', []],
-  ['sponsor', 'sponsor-test.mjs', []],
   ['heatmap', 'heatmap-test.mjs', []],
   ['trust', 'trust-test.mjs', []],
   ['sanitize', 'sanitize-test.mjs', []],

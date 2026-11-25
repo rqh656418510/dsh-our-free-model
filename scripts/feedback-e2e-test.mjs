@@ -85,7 +85,7 @@ try {
   await page.fill('#login-key', key)
   await page.click('form button[type=submit]')
   await page.waitForSelector('.console-nav', { timeout: 20000 })
-  // 全新数据目录会先弹赞助说明与免责声明；等它们出现再关，否则遮罩挡住导航。
+  // 全新数据目录会先弹免责声明；等它出现再关，否则遮罩挡住导航。
   await page.waitForTimeout(3500)
   await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach(d => d.close()))
   await page.waitForTimeout(700)
