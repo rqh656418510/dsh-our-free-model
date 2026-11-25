@@ -27,14 +27,14 @@
 
 ## 1. 仓库拓扑
 
-| 名字 | 地址 | 角色 |
-| --- | --- | --- |
-| `origin` | `git@github.com:rqh656418510/dsh-our-free-model.git` | 你自己的 fork，只推这里 |
-| `upstream` | `https://gh-proxy.com/https://github.com/Ebony-Vinyl/dsh-our-free-model.git`（GitHub 代理镜像，等价于 `https://github.com/Ebony-Vinyl/dsh-our-free-model.git`） | 上游，只拉不推 |
+| 名字       | 地址                                                                                                                                                            | 角色                    |
+|------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|
+| `origin`   | `git@github.com:rqh656418510/dsh-our-free-model.git`                                                                                                            | 你自己的 fork，只推这里 |
+| `upstream` | `https://gh-proxy.com/https://github.com/Ebony-Vinyl/dsh-our-free-model.git`（GitHub 代理镜像，等价于 `https://github.com/Ebony-Vinyl/dsh-our-free-model.git`） | 上游，只拉不推          |
 
-| 分支 | 用途 | 规则 |
-| --- | --- | --- |
-| `main` | 上游镜像 | **永远只做快进合并，不在这上面写提交** |
+| 分支     | 用途           | 规则                                                |
+|----------|----------------|-----------------------------------------------------|
+| `main`   | 上游镜像       | **永远只做快进合并，不在这上面写提交**              |
 | `no-ads` | 我们的工作分支 | 去广告改动只落在这里；每个上游版本以一次 merge 汇入 |
 
 ```
