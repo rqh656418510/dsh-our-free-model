@@ -175,6 +175,20 @@ git merge --abort
 git reset --hard HEAD~1        # 只在自己的工作分支上用
 ```
 
+### 5.6 生成物被"本地运行中的实例"改写（不是冲突，但很坑）
+
+如果 DSH 或独立服务正跑着这个目录的代码，它可能在启动/热重载时**按 `vendor/channel-pack/pack.js` 重新生成** `packages/standalone/channels/business.mjs`。而上游仓库里 `pack.js` 目前落后于 `vendor/channel-pack/src/`（`src/qoder-wasm.ts` 的内存回收修复还没进 `pack.js`），于是重新生成会把已经修好的产物"降级"。
+
+判断方法：`git status` 里出现你没动过的 `packages/standalone/channels/business.mjs`，`git diff` 里是文件头 `原渠道包 SHA256` 变了 + 删掉若干修复代码。
+
+处理：
+
+```bash
+git restore -- packages/standalone/channels/business.mjs   # 以提交里的版本为准
+```
+
+提交前先 `git status` 扫一眼；需要长时间折腾仓库时，最好先停掉本地在跑的 DSH / 独立服务。
+
 ---
 
 ## 6. 可选：让生成物冲突彻底消失
@@ -210,6 +224,7 @@ git config merge.ours.driver true
 - ❌ `git push --all` / `git push --mirror`——会把上游几十个分支和 refs 一起推上去；
 - ❌ 手工编辑 `packages/standalone/web/*`——只能由 `npm run build:standalone-ui` 生成；
 - ❌ 提交 `node_modules/`、`.verify/`、`packages/desktop/src-tauri/.node-license-cache/`；
+- ❌ 无视 `git status` 里莫名其妙出现的 `packages/standalone/channels/business.mjs`（见 5.6，是本地运行中的实例重建的，直接还原）；
 - ❌ 在 `no-ads` 上 `git push --force`（除非你确认只有自己用，并加 `--force-with-lease`）。
 
 ---
