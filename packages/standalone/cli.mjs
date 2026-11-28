@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { startStandalone } from './service.mjs'
 
 const usage = `Our Free Model 独立本地服务
@@ -44,6 +45,25 @@ async function main() {
   }
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)
+  const openManagement = () => {
+    if (process.env.OFM_NO_OPEN_BROWSER === '1' || process.env.CI) return
+    const url = service.managementUrl
+    let opener
+    try {
+      switch (process.platform) {
+        case 'win32': opener = spawn('cmd', ['/c', 'start', '', `"${url}"`]); break
+        case 'darwin': opener = spawn('open', [url]); break
+        default: opener = spawn('xdg-open', [url]); break
+      }
+    } catch {
+      return
+    }
+    opener?.unref?.()
+    opener?.on('error', () => { /* 无可用浏览器时静默忽略 */ })
+  }
+  service.ready.then(() => {
+    try { openManagement() } catch {}
+  }).catch(() => {})
   process.stdout.write(`${service.product} ${service.version}\n管理页面（10 分钟内一次性登录）：${service.managementUrl}\nAPI：${service.url}/v1\nAPI Key 保存在：${service.keyFile}\n`)
   if (service.lan.running) {
     process.stdout.write(`LAN API：${service.lan.baseUrls.join(', ') || `端口 ${service.lan.port}`}\nLAN Key：请在本机管理接口中查看（独立于本机 API Key）\n`)
