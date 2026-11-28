@@ -111,14 +111,13 @@ node scripts/standalone-nav-test.mjs
 
 ### 4.1 广告残留自检（最容易漏的一步）
 
-上游的广告有**三类落点**，只 grep `client.js` 会漏掉后两类，而且这两类**都不产生合并冲突**，
-git 会静默并入——合并命令返回成功不代表没有广告回来：
+上游的广告有**三类落点**，只 grep `client.js` 会漏掉后两类，而且这两类**都不产生合并冲突**，git 会静默并入——合并命令返回成功不代表没有广告回来：
 
-| # | 落点 | 典型标识 | 只查 `client.js` |
-|---|------|----------|------------------|
-| 1 | `client.js`（插件浏览器半边） | `SponsorBanner`、`ofm_sponsor`、`SPONSOR_CARD_URL`、`showUrgentModal`、`urgentShownIds` | 能发现 |
-| 2 | 控制台前端与文案字典 | `frontend/i18n.mjs` 的 `nav.sponsor`、侧边栏 sponsor 菜单、`sponsor.tsx` 路由、`SponsorNotice` | **漏** |
-| 3 | UI 测试里的「等广告弹窗再关」兜底 | `scripts/*-ui-test.mjs` 的 `.ofm-sponsor-dialog` / `.ofm-sponsor-close` | **漏** |
+| # | 落点                              | 典型标识                                                                                       | 只查 `client.js` |
+|---|-----------------------------------|------------------------------------------------------------------------------------------------|------------------|
+| 1 | `client.js`（插件浏览器半边）     | `SponsorBanner`、`ofm_sponsor`、`SPONSOR_CARD_URL`、`showUrgentModal`、`urgentShownIds`        | 能发现           |
+| 2 | 控制台前端与文案字典              | `frontend/i18n.mjs` 的 `nav.sponsor`、侧边栏 sponsor 菜单、`sponsor.tsx` 路由、`SponsorNotice` | **漏**           |
+| 3 | UI 测试里的「等广告弹窗再关」兜底 | `scripts/*-ui-test.mjs` 的 `.ofm-sponsor-dialog` / `.ofm-sponsor-close`                        | **漏**           |
 
 全仓检查（Git Bash，**必须无输出**）：
 
@@ -135,16 +134,13 @@ Get-ChildItem -Recurse -File -Path packages,scripts,src,locale,client.js,index.j
   Select-String -Pattern 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds|ofm-sponsor|SponsorNotice|SponsorPage'
 ```
 
-再查一遍**中文文案**（`赞助`/`赞助商`）。同样限定源码后缀——`*.md` 与二进制会误报
-（例如 `README.md` 里「无隶属、认可或赞助关系」是法律声明，`vendor/magpie/bin/*.exe` 是二进制）：
+再查一遍**中文文案**（`赞助`/`赞助商`）。同样限定源码后缀——`*.md` 与二进制会误报（例如 `README.md` 里「无隶属、认可或赞助关系」是法律声明，`vendor/magpie/bin/*.exe` 是二进制）：
 
 ```bash
 git grep -nE '赞助' -- '*.js' '*.ts' '*.tsx' '*.mjs' '*.css' '*.json' ':!docs' ':!feed'
 ```
 
-`feed/announcements.json` 里的「赞助」是上游历史公告正文，属于运行时数据，可以保留。
-
-产物也要看一眼（i18n 字典会被打进 `app.js`）：
+`feed/announcements.json` 里的「赞助」是上游历史公告正文，属于运行时数据，可以保留。产物也要看一眼（i18n 字典会被打进 `app.js`）：
 
 ```powershell
 Select-String -Path packages\standalone\web\app.js,packages\standalone\web\app.css -Pattern 'sponsor|Sponsor|赞助'
@@ -152,8 +148,7 @@ Select-String -Path packages\standalone\web\app.js,packages\standalone\web\app.c
 
 ### 4.2 有输出怎么办
 
-按第 5 节删掉对应行或文件（`client.js` 见 5.3，前端与文案见 5.2/5.4），
-`npm run build:standalone-ui` 重建产物，再回到 4.1 重跑一次 grep，直到为空。
+按第 5 节删掉对应行或文件（`client.js` 见 5.3，前端与文案见 5.2/5.4），`npm run build:standalone-ui` 重建产物，再回到 4.1 重跑一次 grep，直到为空。
 
 > **案例（2026-11-28，同步上游 `e72860e` / v2.9.1）**
 >
@@ -312,4 +307,4 @@ git config merge.ours.driver true
 - 版本：`package.json` 为 `2.9.1`（与上游同版本，故不会触发应用内升级）
 - 控制台产物：已由合并后的源码重建（8 个本地资源），`build-standalone-ui --check` 通过
 - 广告自检：4.1 的全仓 grep 无输出；`client.js` 广告标识 0 处（上游同基线为 31 处）
-- 待办：`git push origin no-ads`（`origin/no-ads` 仍停在 `cd5f7b2`）
+- 分支状态：`main`、`origin/main`、`upstream/main` 同在 `e72860e`；`no-ads` 已推送到 `origin/no-ads`，无待办
