@@ -38,6 +38,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { compatibleHarnessIdentity, compatibleHarnessPromptMessage } from './harness-identity.js'
 
 /** WASM 文件的绝对路径（位于 lib/，与编译产物的相对位置固定）。 */
 const WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), 'qoder-auth-wasm.wasm')
@@ -263,7 +264,7 @@ export function buildQoderInferPayload(
     // 内部字段（如 DSH 的 `id` / `source`）原样发给上游。
     messages.push({
       role: m.role,
-      content: m.content,
+      content: compatibleHarnessPromptMessage(m).content,
       ...(m.tool_calls === undefined ? {} : { tool_calls: m.tool_calls }),
       ...(m.tool_call_id === undefined ? {} : { tool_call_id: m.tool_call_id }),
     })
@@ -311,7 +312,7 @@ export function buildQoderInferPayload(
       max_input_tokens: ask.maxInputTokens ?? ask.contextWindow ?? 200_000,
     },
     custom_model: null,
-    system: ask.systemText ? [{ type: 'text', text: ask.systemText }] : [],
+    system: ask.systemText ? [{ type: 'text', text: compatibleHarnessIdentity(ask.systemText) }] : [],
     messages,
     // ⚠️ **必须把调用方的工具定义真的发出去**：它是**顶层** `tools`
     // （客户端源码 `tools: o?.tools ?? []`）。早期硬编码 `[]` 让模型拿不到

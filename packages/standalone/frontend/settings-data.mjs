@@ -1,3 +1,5 @@
+import { t } from './i18n.mjs'
+
 /** @param {import('./types').ServiceSettings} settings */
 export function settingsDraft(settings) {
   return {
@@ -37,15 +39,15 @@ export function syncSettings(state, saved, saving) {
 export function validateSettingsDraft(draft) {
   /** @type {Partial<Record<'defaultMaxTokens' | 'probeIntervalMinutes' | 'laneMaxTries', string>>} */
   const errors = {}
-  for (const [key, label, min, max] of [
-    ['defaultMaxTokens', '最大输出 Token', 512, 131072],
-    ['probeIntervalMinutes', '刷新间隔', 1, 1440],
-    ['laneMaxTries', '每回合换出口数', 1, 8],
+  for (const [key, labelKey, min, max] of [
+    ['defaultMaxTokens', 'cfg.maxTokens', 512, 131072],
+    ['probeIntervalMinutes', 'cfg.interval', 1, 1440],
+    ['laneMaxTries', 'cfg.laneMaxTries', 1, 8],
   ]) {
     const raw = String(draft[key] ?? '').trim()
     const value = Number(raw)
     if (!raw || !Number.isInteger(value) || value < min || value > max) {
-      errors[key] = `${label}必须是 ${min}–${max} 的整数。`
+      errors[key] = t.format('cfg.rangeError', { label: t(labelKey), min, max })
     }
   }
   const laneExits = String(draft.laneExits ?? '').split('\n').map(line => line.trim()).filter(line => line !== '')

@@ -58,6 +58,39 @@ async function licenseFiles(dir, prefix = '', depth = 0) {
   return found.sort()
 }
 
+/** Keep the auditable patch bytes in the NOTICE already included in packages. */
+export function magpiePatchNotice(name, bytes) {
+  const original = Buffer.from(bytes)
+  const text = original.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(original)) throw new Error(`Patch is not UTF-8: ${name}`)
+  if (!text.endsWith('\n')) throw new Error(`Patch must end in a newline for a byte-exact NOTICE: ${name}`)
+  const fence = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(match => match[0].length + 1)))
+  const sha256 = createHash('sha256').update(original).digest('hex')
+  const quoted = text.match(/[^\n]*\n/g).map(line => line === '\n' || line === '\r\n' ? `>${line}` : `> ${line}`).join('')
+  const extract = `node -e "const fs=require('node:fs');const s=fs.readFileSync('vendor/magpie/NOTICE.md','utf8');const m=s.match(/<!-- BEGIN OFM ENGINE PATCH ${name} -->\\n> (\\u0060+)diff\\n([\\s\\S]*?)> \\1\\n<!-- END OFM ENGINE PATCH ${name} -->/);if(!m)throw Error('patch not found');const b=Buffer.from(m[2].replace(/^> ?/gm,''),'utf8');fs.writeFileSync('${name}',b);console.log(require('node:crypto').createHash('sha256').update(b).digest('hex'));"`
+  return [
+    `### ${name}`,
+    '',
+    `Source: scripts/magpie-engine-patches/${name} in the OFM source repository.`,
+    `Applied on top of upstream revision ${revision}.`,
+    `Original UTF-8 bytes: ${original.length}; SHA-256: ${sha256}.`,
+    'The quoted diff adds only a reversible "> " prefix to each line (">" for an empty line).',
+    'Removing those prefixes recovers the original UTF-8 bytes, line endings and final newline.',
+    'Extract to the current directory and print its SHA-256 (run from the package root):',
+    '',
+    '```sh',
+    extract,
+    '```',
+    '',
+    `<!-- BEGIN OFM ENGINE PATCH ${name} -->`,
+    `> ${fence}diff`,
+  ].join('\n') + '\n' + quoted + [
+    `> ${fence}`,
+    `<!-- END OFM ENGINE PATCH ${name} -->`,
+    '',
+  ].join('\n')
+}
+
 async function main() {
   await mkdir(scratch, { recursive: true })
   if (!await exists(path.join(source, '.git', 'HEAD'))) {
@@ -88,6 +121,8 @@ async function main() {
     .filter(name => name.endsWith('.patch')).sort()
     .map(name => ({ name, file: path.join(patchDir, name) }))
   for (const patch of patches) {
+    patch.bytes = await readFile(patch.file)
+    patch.sha256 = createHash('sha256').update(patch.bytes).digest('hex')
     await run('git', ['apply', '--whitespace=nowarn', patch.file], source, false)
   }
   if (patches.length > 0) console.log(`build-magpie-engine: ${patches.length} patch(es) applied: ${patches.map(patch => patch.name).join(', ')}`)
@@ -152,6 +187,13 @@ async function main() {
     'The Go runtime license is included as well. Build inputs and hashes are in engine.json.',
     '',
   ]
+  if (patches.length > 0) {
+    notices.push('## Local engine patch sources', '',
+      'These local modifications are shipped here so an installed package can be audited',
+      'without obtaining the development-only scripts directory. Their original byte hashes',
+      'must match the patch records in engine.json.', '')
+    for (const patch of patches) notices.push(magpiePatchNotice(patch.name, patch.bytes), '')
+  }
   for (const row of [...new Set(listed.split(/\r?\n/).filter(Boolean))].sort()) {
     const [name, moduleVersion, dir] = row.split('|')
     if (name === 'github.com/yetone/magpie') continue
@@ -177,12 +219,7 @@ async function main() {
   if (process.platform !== 'win32') await chmod(target, 0o755)
   let previous = {}
   try { previous = JSON.parse(await readFile(path.join(vendor, 'engine.json'), 'utf8')) } catch {}
-  const patchDigests = []
-  for (const patch of patches) {
-    const digest = createHash('sha256')
-    digest.update(await readFile(patch.file))
-    patchDigests.push({ name: patch.name, sha256: digest.digest('hex') })
-  }
+  const patchDigests = patches.map(patch => ({ name: patch.name, sha256: patch.sha256 }))
   const metadata = {
     schemaVersion: 1, name: 'magpie', upstream, revision, version, license: 'MIT',
     build: { command: ['go', 'build', ...flags, '.'], go: await run('go', ['version']) },

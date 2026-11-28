@@ -136,11 +136,15 @@ test('a listing alone is not reported as a successful test', () => {
   assert.equal(modelAvailability('eac/test', {}, true).availability, 'unknown')
 })
 
-const BUN_MISSING_DETAIL = 'OpenCode 免费车道推理需要本机 Bun：请安装 Bun（https://bun.sh 或 npm i -g bun）后重试，或把 Bun 可执行文件路径写入 OUR_FREE_MODEL_BUN 环境变量。'
+const BUN_MISSING_DETAIL = 'OpenCode 免费车道推理需要本机 Bun：请安装 Bun（https://bun.sh 或 npm i -g bun）后重试，或把 Bun 可执行文件路径写入 OUR_FREE_MODEL_BUN 环境变量。安装 Bun 后上游仍可能以 403 地区限制或 429 免费额度拒绝；这属于另一层状态。'
 
 test('a cached "no Bun" result stops being reported once a Bun executable resolves', () => {
   const snapshot = { manualResults: { m: { state: 'unknown', source: 'manual', at: 1, detail: BUN_MISSING_DETAIL } } }
-  assert.match(modelAvailability('m', snapshot, false, { bunAvailable: false }).detail, /需要本机 Bun/)
+  const unavailable = modelAvailability('m', snapshot, false, { bunAvailable: false })
+  assert.match(unavailable.detail, /需要本机 Bun/)
+  assert.match(unavailable.detail, /403.*429/)
+  assert.equal(unavailable.availabilityState, 'transport-unavailable')
+  assert.equal(unavailable.availability, 'unknown')
   assert.equal(modelAvailability('m', snapshot, false, { bunAvailable: true }).detail, '')
   // A real model failure is not mistaken for the transport sentence.
   const failed = { manualResults: { m: { state: 'unknown', source: 'manual', at: 1, detail: 'Upstream request failed: model is unavailable' } } }
@@ -185,4 +189,14 @@ test('the summary re-reads Bun on every request instead of replaying the boot va
   const after = await read()
   assert.equal(after.bun, true)
   assert.equal(after.catalog[0].detail, '')
+})
+
+test('the transport state is distinct from an upstream model verdict', () => {
+  const snapshot = { manualResults: { m: { state: 'unknown', source: 'manual', at: 1, detail: BUN_MISSING_DETAIL } } }
+  const local = modelAvailability('m', snapshot, false, { bunAvailable: false })
+  assert.deepEqual([local.availability, local.availabilityState], ['unknown', 'transport-unavailable'])
+  const region = { manualResults: { m: { state: 'region-blocked', source: 'manual', at: 2, detail: 'HTTP 403 RegionError' } } }
+  assert.deepEqual(modelAvailability('m', region, false, { bunAvailable: false }),
+    { availabilitySource: 'manual', availability: 'region-blocked', detail: 'HTTP 403 RegionError', probedAt: 2,
+      ttftMs: undefined, latencyMs: undefined })
 })

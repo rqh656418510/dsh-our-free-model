@@ -1811,6 +1811,14 @@ export class TraeAdapter extends LlmAdapter {
      * 继续报 `stop` —— 上游已明确宣告结束，不能把正常 done 误判成截断。
      */
     const truncatedStream = finishReason === undefined && !streamEnded && blockCount > 0
+    // A completed tool call can still contain malformed JSON (including model-
+    // emitted XML/DSML or an unmatched brace). That is not evidence of an output
+    // token limit. Keep its raw arguments intact for diagnostics, but give the
+    // caller the real failure instead of the host's misleading max-tokens UI.
+    // An explicit length finish or an unfinished transport keeps the existing
+    // truncation path. Never retry here: tool/text deltas may already be visible.
+    const invalidCompletedTools = argsTruncated && finishReason !== 'length'
+      && (finishReason !== undefined || streamEnded)
     /**
      * 思考死循环是否**是唯一的产出**（无正文、无工具调用）。
      */
@@ -1829,6 +1837,11 @@ export class TraeAdapter extends LlmAdapter {
       // 循环命中但另有可见产出：只能报 max-tokens（保住内容），不能报 error。
       : loopDetected
         ? { kind: 'max-tokens' as const }
+      : invalidCompletedTools
+        ? { kind: 'error' as const, failure: {
+            code: 'TOOL_ARGUMENTS_INVALID',
+            message: 'trae: the completed tool call contains invalid JSON arguments; this is not an output token limit. Ask the model to correct the arguments or write large structured content to a file first.',
+          } }
       : finishReason === 'length'
         || (finishReason === undefined && toolOrder.length > 0)
         || argsTruncated

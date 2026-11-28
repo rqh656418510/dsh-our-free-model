@@ -430,6 +430,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
    */
   const activeQoderAccountId = new Map<string, string | undefined>()
   const qoderAdapter = registerQoderLlm(ctx, {
+    fetchImpl: network.fetch,
     credentialRef: credentialRef(QODER.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {
       // 只从 Qoder 自己的账号池取账号，回退到自己的单凭据 ref，
@@ -505,6 +506,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 不注册斜杠命令：入口在 Channel Pack 的「Qoder (中国版)」面板。
   const qoderCn = new QoderAuth(ctx, { product: QODER_CN })
   const qoderCnAdapter = registerQoderLlm(ctx, {
+    fetchImpl: network.fetch,
     credentialRef: credentialRef(QODER_CN.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {
       // 只取中国版自己账号池的账号，回退到 QODERCN_ACCESS_TOKEN。
@@ -568,6 +570,7 @@ export function apply(ctx: Context, config: { disableOpencode?: boolean; outlet?
   // 不注册斜杠命令：入口在 Channel Pack 的 TRAE 面板。
   const trae = new TraeAuth(ctx)
   const traeAdapter = registerTraeLlm(ctx, {
+    fetchImpl: network.fetch,
     credentialRef: credentialRef(TRAE.defaultCredentialRef),
     resolveCredential: async (modelId?: string) => {
       // ⚠️ `modelId` 必须透传：限流是**按模型**记的（`modelRateLimits[model]`），

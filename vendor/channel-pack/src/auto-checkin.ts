@@ -89,6 +89,8 @@ export interface AutoCheckinDoc {
   lastAt: number
   /** 逐渠道结果（顺序即遍历顺序）；空数组 = 没有可展示的逐渠道信息。 */
   channels: Array<{ provider: string; text: string }>
+  /** Completed billing-day coverage by provider; partial rounds must not block other providers. */
+  providerDates?: Record<string, string>
   /**
    * 用户点过「关闭」的那一轮（存的是那一刻的 `lastAt`）。
    *
@@ -128,6 +130,13 @@ function sanitizeChannels(raw: unknown): Array<{ provider: string; text: string 
   return out
 }
 
+function sanitizeProviderDates(raw: unknown): Record<string, string> | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  return Object.fromEntries(Object.entries(raw).filter(([provider, date]) =>
+    /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(provider) && typeof date === 'string' && DATE_RE.test(date))
+    .slice(0, MAX_CHANNEL_ENTRIES))
+}
+
 /**
  * 归一化文档：非法值一律回落默认值（**不抛错**）。
  *
@@ -141,6 +150,7 @@ export function sanitizeAutoCheckin(raw: unknown): AutoCheckinDoc {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ...DEFAULT_AUTO_CHECKIN }
   const record = raw as Record<string, unknown>
   const ms = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
+  const providerDates = sanitizeProviderDates(record.providerDates)
   return {
     // ⚠️ **只有显式 `false` 才算关闭**（默认是打开的，见 `AutoCheckinDoc.enabled`）：
     // 写成 `=== true` 会让旧文档（没有该字段）与脏数据把开关静默关掉，与
@@ -151,6 +161,7 @@ export function sanitizeAutoCheckin(raw: unknown): AutoCheckinDoc {
     lastResult: typeof record.lastResult === 'string' ? record.lastResult : '',
     lastAt: ms(record.lastAt),
     channels: sanitizeChannels(record.channels),
+    ...(providerDates === undefined ? {} : { providerDates }),
     dismissedRunAt: ms(record.dismissedRunAt),
   }
 }
@@ -262,6 +273,7 @@ class FileAutoCheckinStore implements AutoCheckinStore {
       lastResult: doc.lastResult,
       lastAt: doc.lastAt,
       channels: doc.channels,
+      ...(doc.providerDates === undefined ? {} : { providerDates: doc.providerDates }),
       dismissedRunAt: doc.dismissedRunAt,
     }, null, 2), 'utf-8')
     renameSync(tmp, this.path)
@@ -370,9 +382,11 @@ export function describeRun(totals: RunTotals): string {
 }
 
 /**
- * 这一轮该不该把「今天」记为已跑。
+ * Whether this round contains any evidence of today's coverage.
  *
- * 判据：**至少有一个账号能证明「今天这一轮已被处理」**（`coversToday > 0`）才记。
+ * At least one account must prove coverage. The executor additionally checks
+ * every provider: one successful provider cannot cover another provider whose
+ * daily campaign has not refreshed yet (#824/#948).
  *
  * ⚠️⚠️ **为什么不能看 `claimed + alreadyClaimed`**（真实缺陷，2026-10-02 审查
  * PR !33 定位）：那两项里混着「**刷新前那一轮**」的痕迹。Qoder 的活动每日
@@ -387,8 +401,8 @@ export function describeRun(totals: RunTotals): string {
  * - 跑完但**没有一条能证明今天**（例如只有 Qoder 且赶在 10:00 之前）——
  *   同理不记，当天稍后还有机会；
  * - 一个渠道都没跑（全被跳过）：没有意义，不记。
- * 反之「有成功也有失败」要记：否则一个坏账号会让插件每次启动都把好账号再领一遍
- * （虽然幂等，但白白多发请求）。
+ * Successful providers are remembered independently so retries do not repeat
+ * their upstream claims while another provider is still incomplete.
  */
 export function shouldMarkToday(totals: RunTotals): boolean {
   return totals.coversToday > 0
@@ -518,6 +532,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
 
   async function performRun(): Promise<void> {
     lastAttemptAt = now()
+    const runDate = today()
     const totals = emptyTotals()
     let providers: string[] = []
     try {
@@ -527,14 +542,19 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       deps.warn?.(`[channel-pack] 自动签到：读取账号池失败，本次跳过: ${String(error)}`)
       return
     }
-    const channels: Array<{ provider: string; text: string }> = []
+    const providerDates = Object.fromEntries(Object.entries(doc.providerDates ?? {})
+      .filter(([, date]) => date === runDate))
+    const channels = new Map<string, string>(doc.lastAt > 0 && utc8DateString(doc.lastAt) === runDate
+      ? doc.channels.map(entry => [entry.provider, entry.text]) : [])
+    const unsupported = new Set<string>()
     for (const provider of providers) {
+      if (providerDates[provider] === runDate) continue
       // ⚠️ 排除表先于**任何**上游请求生效（见 isAutoCheckinExcluded 的说明）：
       // zcode 的代价发生在**调用期间**（拉起浏览器产 captcha），事后再判断已经
       // 太晚 —— 必须在调 `claim` 之前就把它摘掉。
       if (isAutoCheckinExcluded(provider)) {
         totals.skipped += 1
-        channels.push({ provider, text: '需手动签到' })
+        channels.set(provider, '需手动签到')
         continue
       }
       let result: BadgeRpcResult<RpcCreditsClaimAllResponse>
@@ -542,7 +562,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
         result = await deps.claim(provider)
       } catch (error) {
         totals.errors += 1
-        channels.push({ provider, text: '出错' })
+        channels.set(provider, '出错')
         deps.warn?.(`[channel-pack] 自动签到：${provider} 调用异常: ${String(error)}`)
         continue
       }
@@ -550,18 +570,19 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
         const message = typeof result.error?.message === 'string' ? result.error.message : ''
         if (isUnsupportedCheckin(message)) {
           totals.skipped += 1
-          channels.push({ provider, text: '无签到接口' })
+          channels.set(provider, '无签到接口')
+          unsupported.add(provider)
           continue
         }
         totals.errors += 1
-        channels.push({ provider, text: '出错' })
+        channels.set(provider, '出错')
         deps.warn?.(`[channel-pack] 自动签到：${provider} 失败: ${message || '未知错误'}`)
         continue
       }
       totals.providers += 1
       const summary = result.value?.summary
       if (summary === undefined) {
-        channels.push({ provider, text: '无可领' })
+        channels.set(provider, '无可领')
         continue
       }
       totals.claimed += summary.claimed
@@ -577,25 +598,24 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       // ⚠️ 记账口径**只认**这一项：渠道用 `coversToday` 自己声明「这条痕迹是不是
       // 今天这一轮的」。缺省回落到 `claimed + alreadyClaimed`，是为了兼容尚未
       // 上报该字段的旧响应（缺字段 ≠ 0，否则整轮会被判成「什么都没证明」）。
-      totals.coversToday += summary.coversToday ?? (summary.claimed + summary.alreadyClaimed)
-      channels.push({ provider, text: describeChannel(summary) })
+      const covered = summary.coversToday ?? (summary.claimed + summary.alreadyClaimed)
+      totals.coversToday += covered
+      if (covered > 0 && summary.failed === 0
+        && covered >= summary.claimed + summary.alreadyClaimed) providerDates[provider] = runDate
+      channels.set(provider, describeChannel(summary))
     }
 
-    if (!shouldMarkToday(totals)) {
-      // ⚠️ 刻意**不写** lastDate：让「凭据还没续上 / 网络不通 / 赶在渠道刷新前
-      // 跑的那一轮」能在下次启动重试，而不是当天就此放弃（判据见 shouldMarkToday）。
-      deps.warn?.(
-        `[channel-pack] 自动签到未记入今日（下次启动会重试）：${describeRun(totals)}`,
-      )
-      return
-    }
+    const complete = Object.keys(providerDates).length > 0 && providers.every(provider =>
+      isAutoCheckinExcluded(provider) || unsupported.has(provider) || providerDates[provider] === runDate)
 
     doc = {
       ...doc,
-      lastDate: today(),
+      lastDate: complete ? runDate : '',
       lastResult: describeRun(totals),
       lastAt: now(),
-      channels,
+      channels: providers.flatMap(provider => channels.has(provider)
+        ? [{ provider, text: channels.get(provider)! }] : []),
+      providerDates,
       // ⚠️ 新一轮跑完要**清掉上一次的「已关闭」标记**：否则用户关过一次后，
       // 明天的新结果会被旧标记静默藏住（`dismissed` 的判据是 lastAt 相等）。
       dismissedRunAt: 0,
@@ -606,7 +626,7 @@ export function createAutoCheckin(deps: AutoCheckinDeps): AutoCheckin {
       // 写盘失败 ⇒ 今天可能再跑一次（幂等，代价是多发一轮请求），如实告警。
       deps.warn?.(`[channel-pack] 自动签到结果写入失败（今天可能重复触发一次）: ${String(error)}`)
     }
-    deps.warn?.(`[channel-pack] 自动签到完成（${today()}）：${doc.lastResult}`)
+    deps.warn?.(`[channel-pack] 自动签到${complete ? '完成' : '尚未全部覆盖（稍后重试未完成渠道）'}（${runDate}）：${doc.lastResult}`)
   }
 
   function runIfDue(): Promise<void> {

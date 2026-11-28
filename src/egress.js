@@ -465,7 +465,7 @@ export async function egressFetch(url, init) {
       if (!executable) {
         // This sentence is the user's only answer until they install Bun, so it
         // carries the fix inline, bilingually, without an "upstream failed" wrap.
-        const error = new Error('OpenCode 免费车道推理需要本机 Bun：请安装 Bun（https://bun.sh 或 npm i -g bun）后重试，或把 Bun 可执行文件路径写入 OUR_FREE_MODEL_BUN 环境变量。/ Install Bun or set OUR_FREE_MODEL_BUN to its executable path (OUR_FREE_MODEL_FREE_TRANSPORT=node restores the legacy transport).')
+        const error = new Error('OpenCode 免费车道推理需要本机 Bun：请安装 Bun（https://bun.sh 或 npm i -g bun）后重试，或把 Bun 可执行文件路径写入 OUR_FREE_MODEL_BUN 环境变量。安装 Bun 后上游仍可能以 403 地区限制或 429 免费额度拒绝；这属于另一层状态。/ Install Bun or set OUR_FREE_MODEL_BUN to its executable path (OUR_FREE_MODEL_FREE_TRANSPORT=node restores the legacy transport). Installing Bun may not be sufficient: the upstream can still return a 403 region refusal or a 429 free-quota refusal.')
         error.laneConfig = true
         throw error
       }
@@ -715,6 +715,7 @@ export async function startEgressRelay({ config, dataDir, log = () => {}, onDead
     }
     outlet = { kind: 'url', url: parsed }
   } else {
+    const subscriptionIntervalSeconds = normalizeSubscriptionInterval(cfg.subscriptionIntervalSeconds)
     const binary = findMihomoBinary(cfg.mihomoPath)
     const dir = path.join(dataDir, 'egress')
     fs.mkdirSync(dir, { recursive: true })
@@ -729,6 +730,7 @@ export async function startEgressRelay({ config, dataDir, log = () => {}, onDead
     const configPath = path.join(dir, 'mihomo.yaml')
     fs.writeFileSync(configPath, renderMihomoConfig({
       subscription: url,
+      subscriptionIntervalSeconds,
       mixedPort,
       apiPort,
       secret,
@@ -974,8 +976,13 @@ function failOnce(res, error) {
 /**
  * Connect to `upstream` through `outlet` and return a socket ready for plain
  * http framing — already TLS-wrapped when the target is https.
+ *
+ * `tlsOptions.ca` applies to the **target** handshake only. The proxy's own
+ * https handshake in `httpConnect` stays on Node's default trust store: a
+ * caller pinning a private gateway root must not also pin the proxy's public
+ * certificate chain.
  */
-export async function openTunnel(upstream, outlet, onSocket) {
+export async function openTunnel(upstream, outlet, onSocket, { ca } = {}) {
   const isTls = upstream.protocol === 'https:'
   const host = upstream.hostname
   const port = Number(upstream.port) || (isTls ? 443 : 80)
@@ -992,9 +999,14 @@ export async function openTunnel(upstream, outlet, onSocket) {
   return await withTimeout(new Promise((resolve, reject) => {
     const secured = tls.connect({
       socket,
-      // An IP literal has no name to assert; the lane's hosts are names.
-      servername: net.isIP(host) === 0 ? host : undefined,
+      // `servername` is SNI, which an IP literal must not send. It is also the
+      // default identity Node verifies; for an IP target the `host` option
+      // supplies that identity so the certificate's IP SAN is checked. Without
+      // one of the two, Node compares against an empty DNS name and every
+      // IP-only certificate fails.
+      ...(net.isIP(host) === 0 ? { servername: host } : { host }),
       ALPNProtocols: ['http/1.1'],
+      ...(ca === undefined ? {} : { ca }),
     })
     secured.once('secureConnect', () => resolve(secured))
     secured.once('error', error => { secured.destroy(); reject(error) })
@@ -1021,7 +1033,12 @@ async function httpConnect(proxy, targetHost, targetPort, onSocket) {
   try {
     if (proxy.protocol === 'https:') {
       socket = await withTimeout(new Promise((resolve, reject) => {
-        const secured = tls.connect({ socket, servername: net.isIP(proxy.hostname) === 0 ? proxy.hostname : undefined })
+        const secured = tls.connect({
+          socket,
+          // Same identity rule as the target handshake: SNI only for names,
+          // `host` only for an IP proxy so its IP SAN is still verified.
+          ...(net.isIP(proxy.hostname) === 0 ? { servername: proxy.hostname } : { host: proxy.hostname }),
+        })
         secured.once('secureConnect', () => resolve(secured))
         secured.once('error', error => { secured.destroy(); reject(error) })
         onSocket?.(secured)
@@ -1275,7 +1292,16 @@ function sameSecret(given, expected) {
  * same way the relay key protects the loopback port in front of it: a listener
  * every local process can borrow is a listener that will be borrowed.
  */
-export function renderMihomoConfig({ subscription, mixedPort, apiPort, secret, auth, logFile }) {
+/** Subscription refresh cadence in seconds; health-check cadence stays separate. */
+export function normalizeSubscriptionInterval(value = 86400) {
+  if (!Number.isInteger(value) || value < 60 || value > 604800) {
+    throw new RangeError('subscription refresh interval must be an integer from 60 to 604800 seconds')
+  }
+  return value
+}
+
+export function renderMihomoConfig({ subscription, subscriptionIntervalSeconds, mixedPort, apiPort, secret, auth, logFile }) {
+  const interval = normalizeSubscriptionInterval(subscriptionIntervalSeconds)
   return [
     '# Managed by dsh-our-free-model. Edits are overwritten on the next sync.',
     `mixed-port: ${mixedPort}`,
@@ -1298,7 +1324,7 @@ export function renderMihomoConfig({ subscription, mixedPort, apiPort, secret, a
     '  egress:',
     '    type: http',
     `    url: ${JSON.stringify(subscription)}`,
-    '    interval: 86400',
+    `    interval: ${interval}`,
     '    path: ./egress-provider.yaml',
     '    health-check:',
     '      enable: true',

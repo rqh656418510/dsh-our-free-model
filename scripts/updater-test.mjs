@@ -18,6 +18,7 @@ import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
 import { parseVersion, compareVersions, parseManifest, fileUrlOf, downloadManifest, parseUploadPackRefs, PluginUpdater, stageRelease, verifyStaged, backupPackage, restoreBackup, installStaged, verifyInstalled, isPackageManagerOwned, profileDirOf, signManifest, verifyManifestSignature, stableStringify, DEFAULT_MANIFEST_SOURCES, PINNED_MANIFEST_PUBLIC_KEY, packageUsesHardLinks, installationIsManaged } from '../src/updater.js'
 import { entryUrlOf, packageUrlOf, selfReload } from '../src/reload.js'
+import { stageTimeoutFor } from '../src/updater.js'
 const CONTROLLED_DEFAULTS = ['http://127.0.0.1:1/never.json']
 
 let failures = 0
@@ -29,6 +30,42 @@ const checkAsync = async (name, fn) => {
   try { await fn(); console.log(`  ok  ${name}`) }
   catch (error) { failures += 1; console.error(`FAIL  ${name} — ${error.message}`) }
 }
+
+check('download deadlines scale with bytes and remain bounded', () => {
+  assert.equal(stageTimeoutFor(0, 30000), 30000)
+  assert.equal(stageTimeoutFor(1024, 30000), 30000)
+  assert.ok(stageTimeoutFor(4 * 1024 * 1024, 30000) > 30000)
+  assert.equal(stageTimeoutFor(1024 ** 3, 30000), 600000)
+  assert.equal(stageTimeoutFor(1, Infinity), 30000)
+  assert.equal(stageTimeoutFor(1, 9999999), 600000)
+})
+
+await checkAsync('a slow large download honors its size budget and verifies every byte', async () => {
+  const body = Buffer.alloc(128 * 1024, 7)
+  const pkg = Buffer.from(JSON.stringify({ name: 'dsh-our-free-model', version: '9.9.9' }))
+  const files = [['package.json', pkg], ['src/engine-parts/test.part', body]].map(([path, bytes]) => ({
+    path, size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  }))
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-sized-download-'))
+  let aborted = false
+  const fetchImpl = async (url, { signal }) => {
+    if (new URL(url).pathname.endsWith('/package.json')) return new Response(pkg)
+    return new Promise((resolve, reject) => {
+      const stop = () => { aborted = true; clearTimeout(timer); reject(signal.reason) }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', stop)
+        resolve(new Response(body))
+      }, 80)
+      signal.addEventListener('abort', stop, { once: true })
+      if (signal.aborted) stop()
+    })
+  }
+  try {
+    await stageRelease({ manifest: { files, base: '../' }, manifestUrl: 'https://fixture.invalid/feed/manifest.json', stageDir, fetchImpl, timeoutMs: 20 })
+    assert.equal(aborted, false, 'the old flat 20ms deadline must not cancel the large file')
+    assert.deepEqual(fs.readFileSync(path.join(stageDir, 'src/engine-parts/test.part')), body)
+  } finally { fs.rmSync(stageDir, { recursive: true, force: true }) }
+})
 const sha = body => crypto.createHash('sha256').update(body).digest('hex')
 
 // ── version comparison ───────────────────────────────────────────────────────
@@ -1108,6 +1145,113 @@ check('scoped layout: .modules.yaml hoistedLocations is read beside the profile 
       hoistedLocations: { '@ebony-vinyl/dsh-our-free-model@2.8.3': ['node_modules/@ebony-vinyl/dsh-our-free-model'] },
     }, undefined, 2))
     assert.equal(isPackageManagerOwned(pkg, '@ebony-vinyl/dsh-our-free-model'), true)
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+// The real linker matrix (issue #343 review). An isolated install lives in
+// pnpm's store: <profile>/node_modules/.pnpm/<name>@<version>/node_modules/<name>.
+// Walking to the first node_modules on the way up stops inside the store, so the
+// lockfile lookup never reaches the profile and an owned install is upgraded as
+// if it were self-managed.
+check('isolated linker: the profile root sits above .pnpm and the package is owned', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-isolated-'))
+  const pkg = path.join(profile, 'node_modules', '.pnpm', 'dsh-our-free-model@2.8.3', 'node_modules', 'dsh-our-free-model')
+  fs.mkdirSync(pkg, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), PNPM_LOCKFILE)
+    assert.equal(profileDirOf(pkg), profile)
+    assert.equal(isPackageManagerOwned(pkg), true, 'an isolated store copy is still pnpm-owned')
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('isolated linker: a scoped store copy resolves the same profile root', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-isolated-scoped-'))
+  const pkg = path.join(profile, 'node_modules', '.pnpm', '@ebony-vinyl+dsh-our-free-model@2.8.3', 'node_modules', '@ebony-vinyl', 'dsh-our-free-model')
+  fs.mkdirSync(pkg, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), [
+      "lockfileVersion: '9.0'",
+      '',
+      'importers:',
+      '',
+      '  .:',
+      '    dependencies:',
+      "      '@ebony-vinyl/dsh-our-free-model':",
+      '        specifier: link:vendor/dsh-our-free-model',
+      '        version: link:vendor/dsh-our-free-model',
+      '',
+    ].join('\n'))
+    assert.equal(profileDirOf(pkg), profile)
+    assert.equal(isPackageManagerOwned(pkg, '@ebony-vinyl/dsh-our-free-model'), false, 'a link: copy is not owned, including in the store')
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('a dependency copy nested inside the package keeps the outer profile root', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-nested-'))
+  const nested = path.join(profile, 'node_modules', 'dsh-our-free-model', 'node_modules', 'fast-lane')
+  fs.mkdirSync(nested, { recursive: true })
+  try {
+    assert.equal(profileDirOf(nested), profile)
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('a path outside any node_modules falls back to its parent', () => {
+  assert.equal(profileDirOf(path.join(os.tmpdir(), 'somewhere', 'pkg')), path.join(os.tmpdir(), 'somewhere'))
+})
+check('a package installed directly under a filesystem root keeps an absolute profile', () => {
+  const root = path.parse(process.cwd()).root
+  assert.equal(profileDirOf(path.join(root, 'node_modules', 'dsh-our-free-model')), root)
+})
+check('workspace copied virtual-store bytes remain pnpm-owned without a root importer or hard links', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-workspace-store-'))
+  try {
+    for (const name of ['dsh-our-free-model', '@ebony-vinyl/dsh-our-free-model']) {
+      const pkg = path.join(profile, 'node_modules', '.pnpm', name.replace('/', '+') + '@2.9.2', 'node_modules', ...name.split('/'))
+      fs.mkdirSync(pkg, { recursive: true })
+      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name, version: '2.9.2' }))
+      fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'\nimporters:\n  apps/profile:\n    dependencies:\n      '${name}':\n        specifier: file:fixture.tgz\n        version: file:fixture.tgz\n`)
+      fs.writeFileSync(path.join(profile, 'node_modules', '.modules.yaml'), 'layoutVersion: 5\nvirtualStoreDir: .pnpm\nhoistedDependencies: {}\n')
+      assert.equal(fs.statSync(path.join(pkg, 'package.json')).nlink, 1)
+      assert.equal(isPackageManagerOwned(pkg, name), true)
+      if (name === 'dsh-our-free-model') assert.equal(installationIsManaged(pkg), true)
+    }
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('cross-importer: a workspace sub-package entry is not the profile ownership', () => {
+  // The profile's own importer only declares another plugin; a workspace
+  // sub-package declares ours. Its bytes are not installed into the profile's
+  // node_modules, so the profile never handed this install to pnpm.
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-cross-import-'))
+  const pkg = path.join(profile, 'node_modules', 'dsh-our-free-model')
+  fs.mkdirSync(pkg, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), [
+      "lockfileVersion: '9.0'", '',
+      'importers:', '',
+      '  .:', '    dependencies:',
+      '      some-other-plugin:', '        specifier: 1.0.0', '        version: 1.0.0', '',
+      '  packages/app:', '    dependencies:',
+      '      dsh-our-free-model:', '        specifier: file:./vendor/x.tgz', '        version: file:./vendor/x.tgz', '',
+    ].join('\n'))
+    assert.equal(isPackageManagerOwned(pkg), false, 'a sub-package importer must not decide profile ownership')
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('root importer: a specifier in the profile importer still marks ownership', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-root-import-'))
+  const pkg = path.join(profile, 'node_modules', 'dsh-our-free-model')
+  fs.mkdirSync(pkg, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), PNPM_LOCKFILE)
+    assert.equal(isPackageManagerOwned(pkg), true)
+  } finally { fs.rmSync(profile, { recursive: true, force: true }) }
+})
+check('v6 lockfile: top-level dependencies still count as the root scope', () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ofm-v6-'))
+  const pkg = path.join(profile, 'node_modules', 'dsh-our-free-model')
+  fs.mkdirSync(pkg, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(profile, 'pnpm-lock.yaml'), [
+      "lockfileVersion: '6.0'", '',
+      'dependencies:', '  dsh-our-free-model:',
+      '    specifier: file:./vendor/x.tgz', '    version: file:./vendor/x.tgz', '',
+    ].join('\n'))
+    assert.equal(isPackageManagerOwned(pkg), true)
   } finally { fs.rmSync(profile, { recursive: true, force: true }) }
 })
 check('a plain distribution: self install is not pnpm-owned', () => {

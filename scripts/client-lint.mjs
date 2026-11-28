@@ -95,6 +95,15 @@ const INDIRECT = new Set([
   // ever reach `t` through a ternary rather than as literals.
   'fb.titlePlaceholderBug', 'fb.titlePlaceholderWish',
   'fb.detailPlaceholderBug', 'fb.detailPlaceholderWish',
+  // Backup action callbacks store a bounded notice key and localize that key
+  // at render time, so an in-flight result follows the current language.
+  'chan.backup.tooBig', 'chan.backup.invalidJson',
+  'chan.backup.exportFailed', 'chan.backup.importFailed',
+  'chan.backup.exported', 'chan.backup.imported',
+  'nav.group.daily', 'nav.group.lanes', 'nav.group.external', 'nav.group.ops',
+  'routing.ioExport', 'routing.ioImport', 'routing.ioNote', 'routing.ioInvalid',
+  'routing.ioTooBig', 'routing.ioExported', 'routing.ioImported', 'routing.ioConfirm',
+  'routing.ioExportFailed', 'routing.ioImportFailed',
 ])
 
 for (const language of ['zh', 'en']) {

@@ -4,16 +4,16 @@ import { stripTypeScriptTypes } from 'node:module'
 import vm from 'node:vm'
 
 const source = fs.readFileSync(new URL('../packages/standalone/frontend/components/channel-browser.tsx', import.meta.url), 'utf8')
-const start = source.indexOf('  const connected =')
+const start = source.indexOf('  const isConnected =')
 const end = source.indexOf('  return <>', start)
 const label = /onClick=\{\(\) => setFilter\(id\)\}>\{label\}<span>\{(.+?)\}<\/span>/.exec(source)?.[1]
 assert.ok(start >= 0 && end > start && label, '渠道筛选和实际计数标签必须可定位')
 const calculation = stripTypeScriptTypes(source.slice(start, end))
-function filterChannels(statuses, filter, search = '') {
+function filterChannels(statuses, filter, search = '', providerText = (provider, key) => provider[key]) {
   return vm.runInNewContext(calculation + `\n;({
     rows, labels: ['all', 'connected', 'pending'].map(id => (${label}))
   })`, {
-    statuses, filter, search, selected: undefined,
+    statuses, filter, search, selected: undefined, providerText,
     providers: [
       { id: 'connected', name: '已接入渠道', org: '测试' },
       { id: 'pending', name: '待接入渠道', org: '测试' },
@@ -39,4 +39,8 @@ export function verifyChannelFilters() {
   assert.deepEqual(Array.from(searched.labels), [4, 1, 3], '分类标签显示全量统计，搜索结果数由结果栏展示')
   assert.deepEqual(Array.from(filterChannels({}, 'all').labels), [4, 0, 4], '没有账号状态的渠道也显示为未连接')
   assert.deepEqual(Array.from(filterChannels(undefined, 'all').labels), [4, '—', '—'], '状态加载前不显示虚构的分类数量')
+  const sorted = filterChannels({ pending: { accounts: { enabled: 1 } }, unknown: { accounts: { enabled: 2 } }, closed: { closed: true, accounts: { enabled: 3 } } }, 'all')
+  assert.deepEqual(Array.from(sorted.rows, row => row.id), ['pending', 'unknown', 'connected', 'closed'], 'connected channels move first; same-state rows keep registry order (#535)')
+  assert.deepEqual(Array.from(filterChannels(undefined, 'all').rows, row => row.id), ['connected', 'pending', 'closed', 'unknown'], 'loading does not change registry order')
+  assert.deepEqual(Array.from(filterChannels(statuses, 'all', 'closed channel', (provider, key) => key === 'name' && provider.id === 'closed' ? 'Closed channel' : provider[key]).rows, row => row.id), ['closed'], 'translated names remain searchable after connected-first ordering')
 }

@@ -62,7 +62,7 @@ import type { GeminiAuth, StartedGeminiLoginFlow } from './gemini-auth.js'
 import { fetchGeminiCreditBalance } from './gemini-credits.js'
 import { LOOMY_TASK_POINTS, LOOMY_TASK_TITLES } from './loomy-onboarding.js'
 import { LOBSTERAI } from './lobsterai-product.js'
-import { QODER, QODER_CN, type QoderProduct } from './qoder-product.js'
+import { QODER, QODER_CN, qoderCatalogInfo, type QoderProduct } from './qoder-product.js'
 import { TRAE } from './trae-product.js'
 import { CLINE } from './cline-product.js'
 import {
@@ -944,6 +944,11 @@ function registerChannelPackEndpoints(
    * 而不是继续等待十分钟直到超时。
    */
   const pendingLoginFailures = new Map<string, string>()
+  const pendingGeminiLogins = new Map<string, StartedGeminiLoginFlow>()
+  ctx.effect(() => () => {
+    for (const flow of pendingGeminiLogins.values()) void flow.close()
+    pendingGeminiLogins.clear()
+  })
 
   /**
    * 用量徽标的显示偏好（`$DSH_HOME/channel-pack/ui-preferences.json`）。
@@ -1730,8 +1735,10 @@ if (provider === LOBSTERAI.id) {
             const reason = error instanceof Error ? error.message : String(error)
             throw new Error(`无法启动 Gemini 登录（本地回调服务启动失败）：${reason}`)
           }
+          pendingGeminiLogins.set(id, geminiStarted)
 
           geminiStarted.result.then(async (credential) => {
+            pendingGeminiLogins.delete(id)
             // ⚠️ 不接收 `persistLogin` 的返回值：它给的是 OIDC `sub`，只适合当稳定
             // 标识。展示名一律走 `geminiAccountLabel`（见下）。
             await gemini.persistLogin(credential, { refName })
@@ -1752,6 +1759,7 @@ if (provider === LOBSTERAI.id) {
             })
             pendingLoginFailures.delete(id)
           }).catch((error: unknown) => {
+            pendingGeminiLogins.delete(id)
             const reason = error instanceof Error ? error.message : String(error)
             ctx.logger.warn(`[channel-pack] background ${GEMINI.id} login failed for ${id}: ${reason}`)
             pendingLoginFailures.set(id, reason.slice(0, 500))
@@ -1773,7 +1781,11 @@ if (provider === LOBSTERAI.id) {
 
       case 'account.delete': {
         const req = payload as RpcDeleteAccountRequest
+        const pending = pendingGeminiLogins.get(req.accountId)
+        pendingGeminiLogins.delete(req.accountId)
+        await pending?.close()
         await pool.removeAccount(req.accountId)
+        pendingLoginFailures.delete(req.accountId)
         return { ok: true, value: undefined }
       }
 
@@ -1933,6 +1945,28 @@ if (provider === LOBSTERAI.id) {
               message: error instanceof Error ? error.message : String(error),
             },
           }
+        }
+      }
+
+      case 'account.completeLogin': {
+        const req = payload as { accountId?: string; url?: string }
+        const accountId = typeof req.accountId === 'string' ? req.accountId : ''
+        const authUrl = typeof req.url === 'string' ? req.url : ''
+        if (accountId === '') return { ok: false, error: { code: 'bad-request', message: '缺少 accountId' } }
+        const pending = pendingGeminiLogins.get(accountId)
+        if (pending === undefined) {
+          return {
+            ok: false,
+            error: {
+              code: 'bad-request',
+              message: '没有正在进行的 Gemini 登录（可能已超时或已完成），请回到面板重新点「添加账号」',
+            },
+          }
+        }
+        try {
+          return { ok: true, value: pending.submit(authUrl) }
+        } catch (error) {
+          return { ok: false, error: { code: 'bad-request', message: error instanceof Error ? error.message : String(error) } }
         }
       }
 
@@ -3161,6 +3195,9 @@ if (provider === LOBSTERAI.id) {
           }
         }
         const value: RpcModelListResponse = {
+          ...isQoderFamily(req.provider)
+            ? { catalog: qoderCatalogInfo(requireQoderFamily(req.provider).product) }
+            : {},
           models: catalog.map((model) => ({
             id: model.id,
             name: model.name,

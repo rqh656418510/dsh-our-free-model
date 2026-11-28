@@ -6,7 +6,7 @@ import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { bunFetch, bunWorkerPath, findBunExecutable } from '../src/bun-fetch.js';
+import { bunFetch, bunWorkerPath, findBunExecutable, bunExecutableCandidates } from '../src/bun-fetch.js';
 
 const server = http.createServer();
 const sockets = new Set();
@@ -46,6 +46,17 @@ const nodeOptions = { executable: process.execPath };
 const call = (path, init = {}, options = nodeOptions) => bunFetch(base + path, init, options);
 const deadline = setTimeout(() => { console.error('Test deadline exceeded'); process.exit(1); }, 30000);
 try {
+  await test('GUI discovery includes macOS package managers and Windows native installs with empty PATH (#852)', async () => {
+    const home = path.join(os.tmpdir(), 'ofm-detection-home');
+    const mac = bunExecutableCandidates({ platform: 'darwin', env: {}, home });
+    for (const candidate of ['/opt/homebrew/bin/bun', '/usr/local/bin/bun', '/opt/local/bin/bun']) assert.ok(mac.includes(candidate));
+    const win = bunExecutableCandidates({ platform: 'win32', env: { APPDATA: home, LOCALAPPDATA: home }, home });
+    assert.ok(win.includes(path.join(home, 'scoop', 'apps', 'bun', 'current', 'bun.exe')));
+    assert.ok(win.includes(path.join(home, 'Microsoft', 'WinGet', 'Links', 'bun.exe')));
+    assert.ok(win.includes(path.join(home, 'npm', 'node_modules', 'bun', 'bin', 'bun.exe')));
+    assert.equal(bunExecutableCandidates({ platform: 'darwin', env: { OUR_FREE_MODEL_BUN: '/chosen/bun' }, home })[0], '/chosen/bun');
+    assert.ok(mac.every(candidate => !candidate.endsWith('.cmd')));
+  });
   await test('string and byte bodies / request and response headers', async () => {
     for (const body of ['hello ✓\u0000', Uint8Array.from([0, 255, 128, 10, 13])]) {
       const response = await call('/echo', { method: 'POST', headers: { 'x-test': 'kept', authorization: 'Bearer PRIVATE' }, body });

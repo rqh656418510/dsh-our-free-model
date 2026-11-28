@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from 'react'
 import type { ComponentType } from 'react'
 import { flushSync } from 'react-dom'
 import brandMark from '../../../../icon.svg?inline'
+import { t, getLocale as locale, switchLocale } from '../i18n.mjs'
 import { Badge, Button } from './ui'
 import { useMotionSetting } from '../motion/hooks'
 import { useMotionField } from '../motion/field'
@@ -13,30 +14,36 @@ type NavIcon = ComponentType<{ size?: number | string; strokeWidth?: number | st
 interface NavItem { id: Page; name: string; icon: NavIcon }
 interface NavGroup { label: string; items: NavItem[] }
 
+// The replacement gateway has no feedback collector and the old host is being
+// retired. Keep the page implementation for a future self-hosted collector,
+// but do not advertise an entry that can only answer 503.
+export const FEEDBACK_ENABLED = false
+const FEEDBACK_NAV: NavItem[] = FEEDBACK_ENABLED
+  ? [{ id: 'feedback', name: '反馈与许愿', icon: MessageSquareWarning }]
+  : []
+
 const CORE_NAVIGATION: NavGroup[] = [
-  { label: '工作空间', items: [
-    { id: 'overview', name: '概览', icon: LayoutDashboard },
-    { id: 'workspace', name: '模型工作台（magpie）', icon: PanelsTopLeft },
-    { id: 'agents', name: '客户端与订阅', icon: Monitor },
-    { id: 'models', name: '模型清单', icon: Boxes },
-    { id: 'usage', name: '用量统计', icon: Activity },
-    { id: 'library', name: '资源库', icon: LibraryBig },
+  { label: t('nav.workspace'), items: [
+    { id: 'overview', name: t('nav.overview'), icon: LayoutDashboard },
+    { id: 'workspace', name: t('nav.workbench'), icon: PanelsTopLeft },
+    { id: 'agents', name: t('nav.agents'), icon: Monitor },
+    { id: 'models', name: t('nav.models'), icon: Boxes },
+    { id: 'usage', name: t('nav.usage'), icon: Activity },
+    { id: 'library', name: t('nav.library'), icon: LibraryBig },
   ] },
-  { label: '渠道与连接', items: [
-    { id: 'providers', name: '聚合渠道', icon: PanelsTopLeft },
-    { id: 'routing', name: '路由组', icon: Route },
-    { id: 'channels', name: 'EAC router', icon: Network },
-    { id: 'eac', name: 'EAC 协付渠道', icon: Handshake },
-    { id: 'connection', name: 'API 接入', icon: Cable },
+  { label: t('nav.groupChannels'), items: [
+    { id: 'providers', name: t('nav.providers'), icon: PanelsTopLeft },
+    { id: 'routing', name: t('nav.routing'), icon: Route },
+    { id: 'channels', name: t('nav.channels'), icon: Network },
+    { id: 'eac', name: t('nav.eac'), icon: Handshake },
+    { id: 'connection', name: t('nav.connection'), icon: Cable },
   ] },
-  { label: '管理', items: [
-    { id: 'plugins', name: '插件中心', icon: Puzzle },
-    { id: 'settings', name: '服务设置', icon: Settings2 },
-    { id: 'updates', name: '应用更新', icon: RotateCw },
+  { label: t('nav.groupManage'), items: [
+    { id: 'plugins', name: t('nav.plugins'), icon: Puzzle },
+    { id: 'settings', name: t('nav.settings'), icon: Settings2 },
+    { id: 'updates', name: t('nav.updates'), icon: RotateCw },
   ] },
-  { label: '项目支持', items: [
-    { id: 'feedback', name: '反馈与许愿', icon: MessageSquareWarning },
-  ] },
+  ...(FEEDBACK_NAV.length > 0 ? [{ label: t('nav.groupSponsor'), items: FEEDBACK_NAV }] : []),
 ]
 
 const PAGE_ICONS: Record<string, NavIcon> = {
@@ -111,13 +118,22 @@ function useTheme() {
 
 export function ThemeToggle() {
   const { theme, toggle } = useTheme()
-  const label = theme === 'dark' ? '切换到浅色主题' : '切换到深色主题'
-  return <Button variant="ghost" className="theme-toggle" aria-label={label} title={theme === 'dark' ? '浅色' : '深色'}
+  const label = theme === 'dark' ? t('nav.themeLight') : t('nav.themeDark')
+  return <Button variant="ghost" className="theme-toggle" aria-label={label} title={theme === 'dark' ? t('nav.light') : t('nav.dark')}
     onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); toggle({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }) }}>
     <span className="theme-toggle-track" data-theme={theme}>
       <span className="theme-toggle-icon theme-toggle-sun" aria-hidden="true"><Sun size={13} /></span>
       <span className="theme-toggle-icon theme-toggle-moon" aria-hidden="true"><Moon size={13} /></span>
     </span>
+  </Button>
+}
+
+/** 语言随 localStorage 持久化并由 switchLocale 重载页面，无需响应式状态。 */
+export function LangToggle() {
+  const next = locale() === 'zh' ? 'en' : 'zh'
+  const label = next === 'en' ? t('nav.switchToEnglish') : t('nav.switchToChinese')
+  return <Button variant="ghost" className="lang-toggle" aria-label={label} title={label} onClick={() => switchLocale(next)}>
+    <span className={next === 'en' ? undefined : 'lang-toggle-cn'} aria-hidden="true">{next === 'en' ? 'EN' : '中'}</span>
   </Button>
 }
 
@@ -127,7 +143,7 @@ export function ThemeToggle() {
  */
 function MotionToggle() {
   const [on, setOn] = useMotionSetting()
-  return <Button variant="ghost" aria-label={on ? '关闭界面动效' : '开启动效'} title={on ? '动效：开' : '动效：关'}
+  return <Button variant="ghost" aria-label={on ? t('motion.disable') : t('motion.enable')} title={on ? t('motion.on') : t('motion.off')}
     onClick={() => setOn(!on)}>
     <Waves size={15} style={{ opacity: on ? 1 : .4 }} />
   </Button>
@@ -136,7 +152,7 @@ function MotionToggle() {
 export const pageNames: Record<string, string> = Object.fromEntries(CORE_NAVIGATION.flatMap(group => group.items.map(item => [item.id, item.name])))
 
 export function pageLabel(page: Page, pluginPages: PluginPage[] = []): string {
-  return pluginPages.find(entry => entry.id === page)?.title ?? pageNames[page] ?? '插件页面'
+  return pluginPages.find(entry => entry.id === page)?.title ?? pageNames[page] ?? t('nav.pluginPage')
 }
 
 export function Sidebar({ page, summary, host, onDisclaimer, pluginPages = [] }: { page: Page; summary?: Summary; host: Host; onDisclaimer(): void; pluginPages?: PluginPage[] }) {
@@ -168,18 +184,18 @@ export function Sidebar({ page, summary, host, onDisclaimer, pluginPages = [] }:
     return () => { window.clearTimeout(timer); window.removeEventListener('resize', scroll) }
   }, [page])
   const groups: NavGroup[] = pluginPages.length === 0 ? CORE_NAVIGATION : [...CORE_NAVIGATION, {
-    label: '插件',
+    label: t('nav.pluginsGroup'),
     items: pluginPages.map(entry => ({ id: entry.id, name: entry.title, icon: pageIcon(entry.icon) })),
   }]
   return <>
-    <a className="console-brand" href="/" aria-label="Our Free Model 首页">
+    <a className="console-brand" href="/" aria-label={t('nav.home')}>
       <img className="console-mark" src={brandMark} alt="" width={32} height={34} />
-      <span>Our Free Model<small>本地模型工作台</small></span>
+      <span>Our Free Model<small>{t('nav.subtitle')}</small></span>
     </a>
     <div className="workspace-switch"><span className="workspace-avatar"><ShieldCheck size={15} /></span>
-      <span>个人工作空间<small>独立本地服务</small></span><Badge>本机</Badge>
+      <span>{t('nav.personalWorkspace')}<small>{t('nav.standaloneService')}</small></span><Badge>{t('nav.localBadge')}</Badge>
     </div>
-    <nav className="console-nav" aria-label="管理导航" ref={navRef}>{groups.map(group => <div className="nav-group" key={group.label}>
+    <nav className="console-nav" aria-label={t('nav.management')} ref={navRef}>{groups.map(group => <div className="nav-group" key={group.label}>
       <span className="nav-group-label">{group.label}</span>
       {group.items.filter(item => item.id !== 'updates' || hasDesktopBridge()).map(item => <button key={item.id} className={`console-nav-item ${page === item.id ? 'selected' : ''}`}
         aria-current={page === item.id ? 'page' : undefined} onClick={() => host.navigate(item.id)}>
@@ -188,13 +204,13 @@ export function Sidebar({ page, summary, host, onDisclaimer, pluginPages = [] }:
         {item.id === 'models' && <span className="count-badge">{summary?.catalog.length ?? '—'}</span>}
       </button>)}
     </div>)}</nav>
-    <div className="sidebar-support"><ShieldCheck size={15} /><div><strong>独立本地存储</strong><p>本机运行 / 仅监听回环地址</p></div></div>
-    <div className="console-sidebar-footer"><div title="本地服务在线"><span className="status-dot" /><span className="console-sidebar-state">在线</span><small>v{summary?.version ?? '—'}</small></div>
-      <MotionToggle /><ThemeToggle /><Button variant="ghost" aria-label="退出管理" title="退出管理" onClick={() => { void host.logout().catch(host.error) }}><LogOut size={15} /></Button></div>
-    <button type="button" className="sidebar-disclaimer" onClick={onDisclaimer}>使用须知与免责声明</button>
+    <div className="sidebar-support"><ShieldCheck size={15} /><div><strong>{t('nav.localStorage')}</strong><p>{t('nav.localNote')}</p></div></div>
+    <div className="console-sidebar-footer"><div title={t('nav.serviceOnline')}><span className="status-dot" /><span className="console-sidebar-state">{t('nav.serviceOnline')}</span><small>v{summary?.version ?? '—'}</small></div>
+      <MotionToggle /><ThemeToggle /><LangToggle /><Button variant="ghost" aria-label={t('nav.logout')} title={t('nav.logout')} onClick={() => { void host.logout().catch(host.error) }}><LogOut size={15} /></Button></div>
+    <button type="button" className="sidebar-disclaimer" onClick={onDisclaimer}>{t('nav.disclaimer')}</button>
   </>
 }
 export function Topbar({ page, summary, pluginPages = [] }: { page: Page; summary?: Summary; pluginPages?: PluginPage[] }) {
-  return <><div className="console-breadcrumb"><span>工作空间</span><ChevronRight size={13} /><strong key={page} className="console-breadcrumb-current">{pageLabel(page, pluginPages)}</strong></div>
-    <div className="console-topbar-status"><span className="status-dot" /><span>{summary?.settings.enabled === false ? '推理已暂停' : '本地服务'}</span><span className="topbar-divider" /><span>LOCAL</span></div></>
+  return <><div className="console-breadcrumb"><span>{t('nav.workspace')}</span><ChevronRight size={13} /><strong key={page} className="console-breadcrumb-current">{pageLabel(page, pluginPages)}</strong></div>
+    <div className="console-topbar-status"><span className="status-dot" /><span>{summary?.settings.enabled === false ? t('nav.paused') : t('nav.localService')}</span><span className="topbar-divider" /><span>LOCAL</span></div></>
 }

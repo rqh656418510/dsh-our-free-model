@@ -115,11 +115,18 @@ the picker by itself as soon as a probe gets through.
 > If you prefer npm:
 >
 > ```
-> dsh plugin --profile web add @ebony-vinyl/dsh-our-free-model@2.9.0
+> dsh plugin --profile web add @ebony-vinyl/dsh-our-free-model@2.9.1
 > ```
 >
 > Its bundle id carries the scope (`@ebony-vinyl/dsh-our-free-model`), so it cannot
 > be mixed with the bare-name local install below in one profile — pick one.
+> The scoped npm artifact also registers its browser module under that scoped id.
+> The source tree and Release local package instead use `dsh-our-free-model` for
+> both the mount name and `client.js` registration id. The id must match the
+> installed mount. Before upgrading a Release local install, disable any old
+> patch or watchdog that automatically "adds the scope" to `client.js`, then
+> restore the artifact's original files. Do not remove the scope from the npm
+> artifact or edit just one registration file; packaging keeps those names aligned.
 >
 > For any same-named package from another channel,
 > this repository is the source of truth.
@@ -148,7 +155,7 @@ and installation contract rather than assuming every desktop shell shares this g
 To install manually as a real directory, use a trusted local tarball:
 
 1. Create `<DSH_HOME>/profiles/<profile>/vendor/`. From the reviewed repository, run `npm pack --ignore-scripts --pack-destination "<DSH_HOME>/profiles/<profile>/vendor"`, or place an official same-version release tarball from this repository there. Local packing does not publish to npm.
-2. Add `"dsh-our-free-model": "file:./vendor/dsh-our-free-model-2.9.0.tgz"` to the profile's `package.json` dependencies, then use the host's installation flow to resolve it. Keep the filename version aligned with this repository's `package.json`; do not substitute a same-named npm registry version.
+2. Add `"dsh-our-free-model": "file:./vendor/dsh-our-free-model-2.9.1.tgz"` to the profile's `package.json` dependencies, then use the host's installation flow to resolve it. Keep the filename version aligned with this repository's `package.json`; do not substitute a same-named npm registry version.
 3. Append `"dsh-our-free-model"` to `dsh.profile.bundles`.
 
 When the package manager owns the installed bytes, set `distribution: 'managed'` in the bundle config or plugin `settings.json`. The package manager then handles updates; in-app upgrades, announcement polling and hot reload stand down while model access remains available. For later updates, replace the trusted tarball and update its dependency path so the old lockfile cannot restore an older copy.
@@ -393,6 +400,8 @@ A named, ordered list of model ids across every lane, which appears in the picke
 ### The local gateway: a native Anthropic surface and connect recipes
 
 Two new endpoints: `POST /v1/messages` (streaming and non-streaming, with correct `message_start` / `content_block_*` / `message_delta` / `message_stop` framing, `thinking` blocks, `tool_use` blocks, a real `stop_reason`, and an in-stream `error` event when a turn fails after the headers went out) and `POST /v1/messages/count_tokens` (a documented local estimate — the plugin ships no tokenizer). Claude Code and the Anthropic SDKs can therefore point straight at the plugin. The existing `/v1/chat/completions` and `/v1/responses` are unchanged, and `/v1/models` now advertises every lane, the aggregate rows and the chains included. A new *Connect a client* section on the gateway page renders ready-to-copy recipes generated from the port that actually bound and the key that is actually required: Claude Code environment variables, Codex `config.toml`, the OpenAI SDK, the Anthropic SDK, curl, and a LAN variant when the relay is up.
+
+Both protocols use the same gateway; Anthropic does not require a second port. Copy the actual address and key from *Connect a client* and choose an id returned by `/v1/models`. `count_tokens` is a local estimate, not the upstream's billing count. A DSH or client tool such as `web_search` or retrieval may use a separately configured provider and billing API; selecting an OFM chat model does not automatically reroute that tool. For an unexpected charge, check the tool's route, model id and provider bill. The specific billing path reported in issue #441 still needs runtime evidence.
 
 One false success was fixed along the way: a turn whose only output was a tool call the caller never declared used to answer as a clean empty success; it now reports what happened, because the old hint could prompt the model to ask for the undeclared RTK CLI. The updated hint tells the user how to fetch the diff with compression off.
 
@@ -642,7 +651,7 @@ All 20 offline suites (including the new `forward-test`) and `tsc --noEmit` pass
 | Re-reviewing this release found two defects in the above | offline `projection-test.mjs` section 7 and `truncation-test.mjs` section 12, plus one forwarded round trip in `tui-test.mjs` | (1) Once the Messages wire recognised V4's `role:'tool'`, it put the same answer inside `tool_result` *and* left it in the ordinary blocks after it — the text twice, and a returned image with its whole base64 payload twice. The message is now skipped once its result is emitted, and reverting that turns the assertion red. (2) `response.incomplete`, `response.failed` and `response.done` end that wire on purpose too; reading only `response.completed` as terminal turned a turn that hit its output ceiling into a cut stream and burned two retries on it. The status still decides the finish token, and a terminal frame naming no reason no longer erases one a previous frame gave. (3) The forwarded `/v1/responses` route had never been exercised with tool history; the outbound `messages` are now compared byte for byte against a stub gateway, call and result both present |
 | What a normal ending looks like on this lane | live upstream, `probes/stream-terminal-frames.mjs` (new) | Raw SSE captured frame by frame: `finish_reason:"stop"` → the usage frame → `data: [DONE]` → `{"choices":[],"cost":"0"}`, identically on two models. So "no finish token ever arrived" is genuinely an anomaly rather than a second normal ending — which is the basis for #10's check |
 | No false positives against the real lane | live upstream, `host-selftest.mjs`, full run | 11 models probed plus plain chat, two tool rounds, three effort rungs and vision input: every call landed on its own normal ending (`stop` / `tool-calls` / `max-tokens`), none read as truncated; the region-gated model still returns `REGION_BLOCKED` |
-| The upstream is documented (#8) | every outbound destination in the code, checked one by one | New section [Where the models come from](#where-the-models-come-from): `opencode.ai/inference/v1/*` (inference and `/models`; `/zen/v1` before 2026-10-14), this repository's `feed/*.json` (raw first, jsDelivr as fallback), and `api.ipify.org` / `ipinfo.io` / `ipapi.co` (only to read back this machine's egress IP and country code). No account pool, no relay |
+| The upstream is documented (#8) | the original keyless lane and its metadata/egress paths were inspected | The original disclosure covered OpenCode, the repository feed and IP/country echo services. This historical check is not a current inventory of every feature's destinations; see [Network and privacy boundaries](docs/privacy-and-network.md) for EAC, account pools, aggregate providers and other triggers |
 | Offline suite | `npm test` (18 suites) | Green; `projection` and `fingerprint` added, still no network and no free-lane quota spent |
 
 ### v1.2.2 (issues #1–#4, #6)
@@ -765,9 +774,12 @@ Requires Node `^22.19.0 || >=24.0.0`. No install step, no dependencies.
 
 ## Where the models come from
 
-Two public keyless upstreams, both dialled directly with no third party in the
-middle; the fourth destination (the EAC lane) is your own or the maintainer's
-deployed gateway, covered in its own section.
+The tables describe two public keyless model sources and their default endpoints.
+EAC models use the EAC gateway; configured aggregate providers, subscriptions and
+account channels have their own paths. An enabled egress proxy or network
+extension can also carry the transport. This is not an exhaustive inventory of
+every network destination; see the conditions below and [Network and privacy
+boundaries](docs/privacy-and-network.md).
 
 **The free lane: OpenCode's key-free gateway**, `https://opencode.ai/inference/v1/*`
 (moved there from `/zen/v1` on 2026-10-14; the old path answers 403 FreeTierError
@@ -779,7 +791,7 @@ checked by direct request against the live gateway (paths and fingerprint:
 | --- | --- | --- |
 | Inference | `POST …/inference/v1/chat/completions`, `…/inference/v1/responses`, `…/inference/v1/messages` (per model, see `endpointFor`) | `Authorization: Bearer public` — this lane is a public, key-free allowance; the plugin holds no secret of yours |
 | Model list | `GET …/inference/v1/models` | same |
-| Announcements and the update manifest | this repository's `feed/*.json`: `raw.githubusercontent.com` first, `cdn.jsdelivr.net` as fallback | none |
+| Announcements and the update manifest | this repository's `feed/*.json`: `raw.githubusercontent.com` first; `cdn.jsdelivr.net`, `gcore.jsdelivr.net` (updates) and `gh-proxy.com` according to each source list | none |
 | Egress region check | `api.ipify.org` / `ipinfo.io` / `ipapi.co`, only to read back your own public IP and country code | none |
 
 **The Kilo channel: Kilo AI's public gateway**, `https://api.kilo.ai/api/gateway`
@@ -793,17 +805,30 @@ request on the day it was wired in:
 
 On privacy and trust, plainly:
 
-- **No account pool, no relay, no reseller.** The tables above are the complete
-  set of destinations the plugin can contact. `npm test` touches no network at
-  all — the shared test scaffolding points both keyless upstreams at closed
-  loopback ports by default, so no suite can "incidentally" reach a real gateway —
-  and the only things that do are `scripts/host-selftest.mjs` and
-  `scripts/probes/`, which you run by hand. If another source is ever added, this
-  section is updated before the feature is.
-- **Your prompts, tool results and any attached images go to the upstream that
-  serves the model you picked, as an ordinary inference request** — the same as
-  calling any model API. Nothing else leaves the machine: the usage dashboard's
-  data, settings and the forwarding key all stay in `DSH_HOME/our-free-model/`.
+- **Model payloads follow the selected lane or your configured routing chain.**
+  An EAC turn sends that turn's request body, including prompts, context, tool
+  results and attached images, to the EAC gateway for forwarding to its model
+  provider. The current adapter selects a sender by lane; it does not send a
+  second copy of every other lane's request to EAC. Retries, recovery and routing
+  chains can make subsequent model requests, and enabled extensions may process
+  requests within their permissions.
+- **Other features also make network requests.** Announcements, updates and the
+  extension registry/signature refresh under startup, cache and timer conditions,
+  using GitHub, jsDelivr and proxy mirrors. Egress checks contact public IP
+  services. GitHub/EAC authorization, imported subscription quota/token refresh,
+  account-channel login/check-in/inference, configured aggregate providers and
+  egress subscriptions contact their respective services. Account channels
+  support local account pools; a provider's presence in the registry does not
+  mean it is enabled or contacted. [Network and privacy boundaries](docs/privacy-and-network.md)
+  records the destination categories, triggers and local credential-discovery paths.
+- **Local storage is not a promise of zero outbound data.** Dashboard and
+  settings files live in `DSH_HOME/our-free-model/`; values needed for
+  authentication, routing or an enabled feature may be sent with that feature's
+  requests. Source inspection establishes the client paths, not an operator's
+  logging, retention, training-use or deletion policy; those policies still need
+  to be published by the relevant operators. The offline tests and manual live
+  probes described under [Development](#development) do not establish that the
+  running plugin is offline.
 - **Key-free is not unmanaged.** The free lane fingerprints clients through
   `x-opencode-*` headers, accounts free usage per session, answers 403 for a
   disallowed region and 429 once the allowance is spent. **Kilo's free pool
@@ -848,14 +873,12 @@ On privacy and trust, plainly:
 
 ## Security and privacy
 
-- All state lives in `DSH_HOME/our-free-model/`; usage and settings stay local, nothing is uploaded.
-- **The aggregate lane's keys never leave the machine.** They are written only into the plugin's own `0600` `settings.json`, requests go only to the provider you configured, and the plugin's API echoes `hasKey` plus a `…abcd` fingerprint rather than the key itself; the Test and Discover probes redact the credential out of anything a provider answers back.
+- The plugin stores its usage, settings and forwarding keys in `DSH_HOME/our-free-model/`. Request parameters and credentials needed by an enabled feature are sent to the corresponding service; see [Network and privacy boundaries](docs/privacy-and-network.md).
+- **Aggregate keys authenticate requests to the configured provider.** They are stored in the plugin's `0600` `settings.json` and sent to that provider's endpoint for inference, Test and Discover requests. The management API echoes `hasKey` plus a `…abcd` fingerprint; Test and Discover redact known keys from provider responses. Check the Base URL before entering a key, and include any configured proxy or extension in your assessment of the request path.
 - The forward listener binds a **loopback address only**, `127.0.0.1` by default, and rejects keyless requests. Widening it to a routable interface is refused: `POST /settings` answers 400 with the reason, and on a composition with no web server a hand-written `settings.json` simply does not start the listener. That traffic is spent from this machine's free lane; one string in a settings file should not put a whole subnet on it.
-- **Network access is a second door, not a relaxation of the rule above.** The local listener still binds loopback only and still refuses a routable address; reaching another machine takes an explicit switch, and then **every** request must carry the network key — `/` and `/health` included, unlike the local listener, because an unauthenticated liveness answer tells the whole subnet that this machine is here and proxying. The relay carries five whitelisted paths (`/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/messages/count_tokens`, each also accepted without its `/v1` prefix) and is not a general proxy for whatever else answers on loopback; it swaps the network key for the local one at the door, so the two are never interchangeable; a request that already carries the relay's hop marker is refused with `508`, so a relay port equal to the local one cannot spin. The network key is minted by `crypto`, compared with `timingSafeEqual`, stored in the same `0600` file, and rotated on its own from the panel.
-
-- **Network access is a second door, not a relaxation of the rule above.** The local listener still binds loopback only and still refuses a routable address; reaching another machine takes an explicit switch, and then **every** request must carry the network key — `/` and `/health` included, unlike the local listener, because an unauthenticated liveness answer tells the whole subnet that this machine is here and proxying. The relay carries three whitelisted paths (`/v1/models`, `/v1/chat/completions`, `/v1/responses`) and is not a general proxy for whatever else answers on loopback; it swaps the network key for the local one at the door, so the two are never interchangeable; a request that already carries the relay's hop marker is refused with `508`, so a relay port equal to the local one cannot spin. The network key is minted by `crypto`, compared with `timingSafeEqual`, stored in the same `0600` file, and rotated on its own from the panel. **The address to dial is re-read from this machine's interfaces** — the panel polls it every 15 s while the relay is on, so a laptop that changed networks, woke from sleep or brought a VPN up is not told where it used to be. A machine commonly holds several private addresses at once (the router's `192.168.x.y`, plus whatever a virtual switch, tunnel or VPN adapter has), so the physical interface leads and is the address the panel offers to copy, with the others listed below it; the relay binds every interface, but whether a given address answers from another machine depends on the network that adapter is on.
+- **Network access uses a separate authenticated relay.** The local listener still binds loopback only and still refuses a routable address; reaching another machine takes an explicit switch, and then **every** request must carry the network key — `/` and `/health` included, unlike the local listener, because an unauthenticated liveness answer tells the whole subnet that this machine is here and proxying. The relay carries five whitelisted paths (`/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/messages/count_tokens`, each also accepted without its `/v1` prefix) and is not a general proxy for whatever else answers on loopback; it swaps the network key for the local one at the door, so the two are never interchangeable; a request that already carries the relay's hop marker is refused with `508`, so a relay port equal to the local one cannot spin. The network key is minted by `crypto`, compared with `timingSafeEqual`, stored in the same `0600` file, and rotated on its own from the panel. **The address to dial is re-read from this machine's interfaces** — the panel polls it every 15 s while the relay is on, so a laptop that changed networks, woke from sleep or brought a VPN up is not told where it used to be. A machine commonly holds several private addresses at once (the router's `192.168.x.y`, plus whatever a virtual switch, tunnel or VPN adapter has), so the physical interface leads and is the address the panel offers to copy, with the others listed below it; the relay binds every interface, but whether a given address answers from another machine depends on the network that adapter is on.
 - **The EAC lane's per-user gate lives server-side.** The plugin carries only a shared signing secret, and any install can extract it — so the one place a per-person gate can actually hold is the gateway in front of the relay credential. A chat turn needs a token minted after a GitHub sign-in verified to have starred the repository; the star is re-checked on a configurable window (12 h by default), a removed star revokes at the next sweep, tokens are revocable at any time, and per-account rate and concurrency ceilings bound a shared token. The relay key never reaches the plugin, and the token never reaches the browser — the settings page sees a login name and a verdict.
-- The forward key is minted at runtime by `crypto`, compared with `timingSafeEqual`, and stored in a `0600` file. No hardcoded credential ships in this repository. `/` and `/health` answer ahead of the key check because they are liveness probes — they answer only "is it there"; the model roster requires the key.
+- The forward key is minted at runtime by `crypto`, compared with `timingSafeEqual`, and stored in a `0600` file. It differs from the package's shared EAC signing material and OAuth client identifiers, which cannot be treated as secrets held only by the user. `/` and `/health` answer ahead of the key check because they are liveness probes — they answer only "is it there"; the model roster requires the key.
 - The plugin's HTTP routes carry a **request trust fence** (fixed in v1.1): the plugin's `/api/our-free-model` prefix outranks the kernel's `/api` in webServer's longest-prefix dispatch and used to bypass kernel auth. Every request now goes through the composition's `connection` admission first (exactly the kernel's `/api` check: cookie/token); compositions without a connection service fall back to a structural fence — loopback Host, cross-site `sec-fetch-site` refused, `Origin`/`Referer` must match the Host authority and port, and a **missing or empty Host is refused too** (fail closed; there is no fallback to the socket's local address). Measured: foreign Host/Origin 403, cookieless loopback 401. `connection` is resolved per request, because the browser half provides it only after plugins load — reading it once at apply time silently degrades the fence to its structural layer for the life of the process.
 - **Announcement HTML renders through a strict client-side allowlist**: `scripts/sanitize-test.mjs` runs an XSS corpus (script injection, event handlers, `javascript:`/`data:` URLs, iframe/svg/form, style injection, mangled tags) and asserts all of it is dropped; nothing ever reaches an `innerHTML` sink. The feed URL is user-overridable, so the renderer treats feed content as untrusted.
 - **The in-app upgrade integrity chain (signed as of v1.3.2)**: manifest Ed25519 signature verification (public key pinned in `src/updater.js`; unsigned or unverified manifests are refused outright, so no mirror can serve an installable forgery) → manifest validation (semver, path traversal, hash shape, `base` restricted to manifest-relative paths) → per-file SHA-256 + byte size on download → read-back verification of staging → read-back verification after install → backup restore on any failure. The manifest is re-fetched immediately before installing so a stale one can never vouch for different bytes. Boundaries in [Known limitations](#known-limitations).
@@ -865,7 +888,9 @@ On privacy and trust, plainly:
 
 ## License
 
-OFM's own code is MIT — see [LICENSE](LICENSE). Third-party sources retain their applicable license terms.
+OFM's own code is MIT — see [LICENSE](LICENSE). Third-party sources retain their applicable terms. Complete GPL-3.0 and AGPL-3.0-only texts are also included in the root `LICENSE` shipped with npm/Release artifacts; the complete Apache-2.0 text ships in `vendor/magpie/NOTICE.md`. The source repository's `LICENSES/` directory keeps separate texts and provenance records.
+
+Historical source pointers and the remaining corresponding-source checks are recorded in `LICENSES/README.md` and `LICENSES/PROVENANCE.md`, including for recipients tracing v2.8.5 and earlier artifacts. These additions do not change already published artifact bytes or independently establish that every historical licensing requirement has been met.
 
 This project is an independent plugin and is not affiliated with, endorsed by, or
 sponsored by any model provider. Using it to reach free tiers is subject to those
@@ -884,10 +909,10 @@ Thanks also to:
 - [9router](https://github.com/decolua/9router) (MIT) — origin of the eight evidence scripts under `scripts/probes/`. Those eight files are byte-for-byte copies with only the probe base URL changed; each carries its MIT attribution in the file header and the full licence is in [LICENSE](LICENSE#9router--mit). They import 9router's own modules, so they run only inside that project's checkout, and they are not part of the release set.
 - [magpie-muse-web](https://github.com/JohnWangggg/magpie-muse-web) (no SPDX licence declared upstream) — upstream of the `muse-web` bridge extension.
 
-**The following projects have no code or data left in this repository.** They are kept as a historical record only:
+**The following projects are historical implementation sources or compatibility references.** Replacement records do not by themselves erase provenance or settle licence obligations:
 
-- [opencode2api](https://github.com/jasonxu114514/opencode2api) (GPL-3.0) — the earliest reference for free-lane request shaping. 2.8.6 rewrote the implementation and deleted its assets; the current code shares no text, function name or constant table with that project, and works only from official assets generated from [sst/opencode](https://github.com/sst/opencode) v2.2.3 (MIT). See the [maintenance notes](src/o2a/SYNC.md).
-- [free-claude-code](https://github.com/Alishahryar1/free-claude-code) (AGPL-3.0-only) — the earliest reference for the provider directory and the five local answers. 2.8.6 rewrote the local answers and rebuilt the directory from models.dev; what survives is five optimization ids and some provider ids as **persisted configuration keys** (renaming one would silently re-enable an optimization a user had switched off). See [provider compatibility](docs/provider-compatibility.md).
+- [opencode2api](https://github.com/jasonxu114514/opencode2api) (GPL-3.0) — historical free-lane request-shaping source. The [maintenance notes](src/o2a/SYNC.md) and [asset provenance](docs/opencode-assets.md) record the current replacement status and assets generated from [sst/opencode](https://github.com/sst/opencode) (MIT). The maintainers read the earlier source and make no clean-room claim.
+- [free-claude-code](https://github.com/Alishahryar1/free-claude-code) (AGPL-3.0-only) — historical provider-directory and local-answer source. Persisted keys and manual compatibility records retain their source history; the entire directory cannot be described as rebuilt from current official sources. See [provider compatibility](docs/provider-compatibility.md) and the [replacement record](docs/verification/2026-11-18-independent-core.md).
 - [trae-mate](https://github.com/luckymiaow/trae-mate) (MIT) — an early reference for the TRAE check-in flow, since rewritten.
 - [dsh-cline-pass](https://github.com/codeOct/dsh-cline-pass) (MIT) — an early reference for Cline quota and request logging, since rewritten.
 - [rtk](https://github.com/rtk-ai/rtk) (CLI Apache-2.0, engine BUSL-1.1) — the earliest reference for the tool-output filters. `src/token-saver/compact/` has been rewritten in full; only RTK's output markers and thresholds remain, because those markers are a wire format a model has been trained to read — changing them would change model behaviour rather than make the code more original. The replacement scope is in the [2.8.6 verification notes](docs/verification/2026-11-18-independent-core.md).

@@ -30,14 +30,14 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { externalUrl, openExternal } from './src/open-external.js'
 import { findBunExecutable } from './src/bun-fetch.js'
-import { ROUTE_LABELS, ROUTE_MAIN, ROUTE_REGION } from './src/adapter.js'
+import { ROUTE_LABELS, ROUTE_MAIN, ROUTE_REGION, createAccountChannelBridge } from './src/adapter.js'
 import { DATA_DIR_NAME, resolveDshHome, publicModelVisibility, validateModelVisibility, isModelHidden, isModelHiddenByGroup, hiddenIdsFor } from './src/store.js'
 import { isEacEntry, isKiloEntry } from './src/catalog.js'
 import { STATE } from './src/probe.js'
 import { generateKey, rankLanAddresses, startForwardServer, startLanRelay } from './src/forward.js'
 import { chanGatewayCredential, chanGatewayEnabled, chanGatewayPort, startChanRelay } from './src/chan-relay.js'
 import { CODE, UpstreamError } from './src/http.js'
-import { egressActive, egressFetch, outletLabel, readOutletSelection, startEgressRelay, setFreeLaneProxies, setFreeLaneMaxTries, freeLaneProxyActive, freeLaneExitSnapshot, clearLaneExits, laneProxyEcho } from './src/egress.js'
+import { egressActive, egressFetch, outletLabel, readOutletSelection, startEgressRelay, normalizeSubscriptionInterval, setFreeLaneProxies, setFreeLaneMaxTries, freeLaneProxyActive, freeLaneExitSnapshot, clearLaneExits, laneProxyEcho } from './src/egress.js'
 import { directFetch } from './src/eac.js'
 import { clearEacUser, readEacUser, writeEacUser } from './src/eac-user.js'
 import { createEacLoginPoller } from './src/eac-login.js'
@@ -166,6 +166,16 @@ export function apply(ctx, config) {
 
   const stores = createRuntimeStores({ dataDir, logger })
   const { settings, stats, availability } = stores
+
+  // Manual and package-manager installs bypass the in-app upgrade callback.
+  // Reconcile with this module's version, including ordinary hot reloads, but
+  // let a pending self-upgrade record success only after its transaction commits.
+  const pendingUpgrade = globalThis[Symbol.for('our-free-model.pending-upgrade')]
+  if (packageVersion !== '' && pendingUpgrade?.version !== packageVersion
+    && settings.get().installedVersion !== packageVersion) {
+    settings.update({ installedVersion: packageVersion })
+    settings.flush()
+  }
 
   if (generation > 1) {
     settings.update({ reloadedAt: Date.now(), reloadCount: generation - 1 })
@@ -441,7 +451,6 @@ export function apply(ctx, config) {
   // The successor offers a notification callback, but only the caller that
   // confirmed selfReload() and committed the outcome may invoke it. Booting a
   // replacement is not yet evidence that every fiber started successfully.
-  const pendingUpgrade = globalThis[Symbol.for('our-free-model.pending-upgrade')]
   if (pendingUpgrade?.version === packageVersion) {
     pendingUpgrade.notify = () => {
       if (disposed) return
@@ -488,10 +497,14 @@ export function apply(ctx, config) {
   // a desktop-console surface.
   for (const descriptor of builtinDescriptors()) extensions.registerBuiltin(descriptor)
   extensionHookRuntime = extensions
+  const accountChannelRuntime = createAccountChannelBridge(ctx.llm, () => {
+    if (!disposed) modelRuntime.syncAggregateCatalog()
+  })
   const modelRuntime = createModelRuntime({
     ...stores,
     logger,
     subscriptionRuntime,
+    accountChannelRuntime,
     extensionRuntime: extensions,
     attributionUserAgent: 'deepseek-harness',
     resolveImage: imageResolver(ctx, logger),
@@ -501,6 +514,10 @@ export function apply(ctx, config) {
   })
   const { state, adapter, refreshCatalog, refreshAvailability, watchEgress, fetchListing, publicModelRows, syncAggregateCatalog, clearLaneBreaker, laneGate } = modelRuntime
   const runForwarded = modelRuntime.complete
+  ctx.effect(() => () => accountChannelRuntime.dispose(), 'our-free-model: account channel bridge')
+  ctx.on?.('llm/adapters-updated', () => {
+    void accountChannelRuntime.refresh().catch(error => logger.warn?.(`our-free-model: account catalog unavailable (${error?.message ?? error})`))
+  })
 
   // ── registration ────────────────────────────────────────────────────────────
   const routes = () => Object.keys(state().membership)
@@ -945,7 +962,8 @@ export function apply(ctx, config) {
     const mode = desired.mode === 'client' ? 'client' : 'subscription'
     const url = String(desired.url ?? '').trim()
     const mihomoPath = String(desired.mihomoPath ?? '').trim()
-    const fingerprint = `${mode}\n${url}\n${mihomoPath}`
+    const subscriptionIntervalSeconds = desired.subscriptionIntervalSeconds ?? 86400
+    const fingerprint = `${mode}\n${url}\n${mihomoPath}\n${mode === 'subscription' ? subscriptionIntervalSeconds : ''}`
     if (outletRelay !== null && wanted && outletFingerprint === fingerprint && !outletRelay.dead) return
     if (outletRelay === null && !wanted) return
     if (outletRelay !== null) {
@@ -974,6 +992,7 @@ export function apply(ctx, config) {
             mode: current.mode === 'client' ? 'client' : 'subscription',
             url: String(current.url ?? '').trim(),
             mihomoPath: String(current.mihomoPath ?? '').trim(),
+            subscriptionIntervalSeconds: current.subscriptionIntervalSeconds,
           }
         },
         dataDir,
@@ -1160,6 +1179,7 @@ export function apply(ctx, config) {
         outlet: { active: egressActive, fetch: egressFetch },
       })
       channelPack = { state: 'ready', error: '' }
+      void accountChannelRuntime.refresh().catch(error => logger.warn?.(`our-free-model: account catalog unavailable (${error?.message ?? error})`))
       logger.info?.('our-free-model: free-channel pack mounted (10 account providers)')
     }).catch(error => {
       if (stopped) return
@@ -2090,10 +2110,12 @@ export function createApiRoutes(deps) {
       }
       if (method === 'POST' && routePath === '/eac/login/start') {
         const started = await deps.eacAuth.start()
+        if (started.error !== undefined) deps.logger?.warn?.(`our-free-model: eac login start failed (${started.error}${started.detail ? `: ${started.detail}` : ''})`)
         return send(started.error === undefined ? 200 : 404, started.error === undefined ? started : { error: started.error })
       }
       if (method === 'GET' && routePath === '/eac/login/poll') {
         const polled = await deps.eacAuth.poll(url.searchParams.get('link') ?? '')
+        if (polled.error !== undefined) deps.logger?.warn?.(`our-free-model: eac login poll failed (${polled.error}${polled.detail ? `: ${polled.detail}` : ''})`)
         const status = polled.error === undefined ? 200 : polled.error === 'bad-link' ? 400 : polled.error === 'no-lane' ? 404 : 502
         return send(status, polled)
       }
@@ -2271,7 +2293,11 @@ export function createApiRoutes(deps) {
           next.forward = forward
         }
         if (patch.egress !== undefined) {
-          const egressPatch = pick(patch.egress, ['enabled', 'mode', 'url', 'mihomoPath'])
+          const egressPatch = pick(patch.egress, ['enabled', 'mode', 'url', 'mihomoPath', 'subscriptionIntervalSeconds'])
+          if (egressPatch.subscriptionIntervalSeconds !== undefined) {
+            try { normalizeSubscriptionInterval(egressPatch.subscriptionIntervalSeconds) }
+            catch (error) { return send(400, { error: error.message }) }
+          }
           if (egressPatch.mode !== undefined && egressPatch.mode !== 'subscription' && egressPatch.mode !== 'client') {
             return send(400, { error: 'the egress mode is "subscription" or "client"' })
           }
@@ -2806,6 +2832,7 @@ function publicSettings(settings, forwardInfo, egressInfo) {
     // the settings page's own ask (see src/egress.js `outletLabel`).
     egress: {
       ...pick(settings.egress ?? {}, ['enabled', 'mode', 'mihomoPath']),
+      subscriptionIntervalSeconds: settings.egress?.subscriptionIntervalSeconds ?? 86400,
       hasUrl: String(settings.egress?.url ?? '') !== '',
       urlLabel: outletLabel(settings.egress?.url ?? ''),
       outlet: egressInfo?.outlet ?? '',

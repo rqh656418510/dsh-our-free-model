@@ -222,6 +222,50 @@ try {
     assert.equal(fs.existsSync(path.join(dshHome, 'channel-pack')), false)
     assert.equal((await api('/api/management/eac/status')).value.local, false)
   })
+  await check('routing save reaches the real channel worker, with exact tool constraints and one accounting owner', async () => {
+    const login = await fetch(service.url + '/api/management/session', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: JSON.parse(fs.readFileSync(service.keyFile, 'utf8')).managementKey }),
+    })
+    assert.equal(login.status, 200)
+    const cookie = login.headers.get('set-cookie').split(';')[0]
+    const manage = (suffix, body) => api('/api/management' + suffix, body, { cookie })
+    const member = 'account:cline/cline-free/mimo-v2.6-flash'
+    const before = (await manage('/routing')).value
+    assert.ok(before.models.some(row => row.id === member))
+    const saved = await manage('/routing/save', { combo: {
+      name: 'Account worker fixture', models: [member], strategy: 'fallback', stickyLimit: 1, enabled: true,
+    } })
+    assert.equal(saved.response.status, 200)
+    const id = saved.value.combos.find(row => row.name === 'Account worker fixture').id
+    const tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }]
+    const invoke = tool_choice => api('/v1/chat/completions', {
+      model: id, messages: [{ role: 'user', content: 'worker routing fixture' }], tools, tool_choice,
+    })
+    try {
+      const first = requests.length
+      const automatic = await invoke('auto')
+      assert.equal(automatic.response.status, 200)
+      assert.equal(automatic.value.choices[0].message.tool_calls[0].function.name, 'lookup')
+      const outgoing = requests.slice(first).filter(row => row.pathname.endsWith('/chat/completions'))
+      assert.equal(outgoing.length, 1)
+      assert.equal(outgoing[0].body.model, 'cline-free/mimo-v2.6-flash')
+      const noTools = await invoke('none')
+      assert.equal(noTools.response.status, 200)
+      assert.equal(noTools.value.choices[0].message.content, 'account-ok')
+      assert.equal(noTools.value.choices[0].message.tool_calls, undefined)
+      assert.equal(requests.at(-1).body.tools, undefined)
+      for (const choice of ['required', { type: 'function', function: { name: 'lookup' } }]) {
+        const count = requests.length
+        const rejected = await invoke(choice)
+        assert.equal(rejected.response.status, 400)
+        assert.match(JSON.stringify(rejected.value), /tool_choice/)
+        assert.equal(requests.length, count, 'unsupported constraints must fail before upstream dispatch')
+      }
+    } finally {
+      assert.equal((await manage('/routing/remove', { id })).response.status, 200)
+    }
+  })
   await check('账号渠道与 Kilo 共用完整 ID 时精确匹配，并在账号离场后重算资格', async () => {
     const shared = 'loomy/fixture-free'
     const sibling = 'loomy/fixture:free'
@@ -370,6 +414,7 @@ try {
     assert.equal((await api('/api/management/channels/rpc', { method: 'gateway.getEnabled', payload: {} })).value.value.apiKey.value, key)
   })
   await check('真实 Cline / Loomy 适配器非流式、SSE、Responses、工具及用量链路', async () => {
+    const before = (await api('/api/management/stats')).value
     const body = { model: 'cline/cline-free/mimo-v2.6-flash', messages: [{ role: 'user', content: 'hi' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }] }
     const reply = await api('/v1/chat/completions', body)
     assert.equal(reply.response.status, 200)
@@ -383,8 +428,8 @@ try {
     assert.equal(responses.response.status, 200, JSON.stringify(responses.value))
     assert.ok(JSON.stringify(responses.value).includes('call_fixture'))
     const stats = (await api('/api/management/stats')).value
-    assert.equal(stats.turns, 3)
-    assert.equal(stats.grand.input, 33)
+    assert.equal(stats.turns - before.turns, 3)
+    assert.equal(stats.grand.input - before.grand.input, 33)
     const ledger = await rpc('usage.tokenLedger', {})
     assert.ok(JSON.stringify(ledger).includes('cline-free/mimo-v2.6-flash'))
     assert.ok(JSON.stringify(ledger).includes('fixture-free'))

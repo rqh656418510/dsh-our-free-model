@@ -10,9 +10,10 @@ import { buildComboCatalog, normalizeCombos } from '../src/combos.js'
 import { subscriptionCatalog } from '../src/subscription-adapter.js'
 import { filterModels } from '../packages/standalone/frontend/models-data.mjs'
 import { visibilityCopy } from '../packages/standalone/frontend/visibility-data.mjs'
+import { t as consoleT, numLocale, providerText } from '../packages/standalone/frontend/i18n.mjs'
 
 const source = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
-  .replace('exports.__test = {', 'exports.__test = { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity,')
+  .replace('exports.__test = {', 'exports.__test = { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity, RoutingPage,')
 let bundle
 const window = {
   __ModuleLoader__: { load: value => { bundle = value } },
@@ -50,7 +51,7 @@ const fetch = async (url, options) => {
   })
 }
 new Function('window', 'fetch', source)(window, fetch)
-const { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity } = bundle.factory(() => react).__test
+const { Shell, FreePage, ChannelCard, DICT, Roster, ModelCard, Preferences, ModelPicker, ChainEditor, ChainCard, ChainCapacity, RoutingPage } = bundle.factory(() => react).__test
 const t = key => DICT.zh[key] ?? key
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes)
   : tree && typeof tree === 'object' ? [tree, ...nodes(tree.children)] : []
@@ -543,7 +544,7 @@ let editor = render(ChainEditor, editorProps)
 let capacity = nodes(editor).find(node => node.type === ChainCapacity).props.capacity
 assert.equal(capacity.contextWindow, 128000)
 assert.equal(capacity.maxOutput, 16000)
-assert.equal(capacity.vision, false)
+assert.equal(capacity.vision, true, 'mixed combos preserve images for their vision-capable members')
 effects.length = 0
 button(editor, t('routing.removeMember')).props.onClick()
 render(ChainEditor, editorProps)
@@ -572,7 +573,7 @@ const standaloneSummary = { settings: { enabled: true, hiddenModelIds: [], hideF
   catalog: [{ id: 'free', name: 'Free', channel: 'anonymous', routable: true }, { id: 'account', name: 'Account', channel: 'lobsterai', routable: true }] }
 const savedPatches = []
 const context = {
-  ...react, h: react.createElement, Fragment: 'fragment', providers: [], filterModels, visibilityCopy,
+  ...react, h: react.createElement, Fragment: 'fragment', providers: [], filterModels, visibilityCopy, t: consoleT, numLocale, providerText,
   document: { documentElement: { lang: 'en' } },
   defaultRangeExtractor: () => [],
   useVirtualizer: ({ count }) => ({ getTotalSize: () => count * 112,

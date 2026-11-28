@@ -213,7 +213,13 @@ try {
   await ctx.accountPool.removeAccount('automatic-loomy')
   creds.delete('AUTO_LOOMY_FIXTURE')
   console.log(`ok  ${sourceMode ? 'source modules' : 'generated pack'}: 10 providers, no OpenCode registration/warmup, historical data retained, account RPCs refused`)
-  if (sourceMode) await verifySourceRegressions({ ctx, adapters, call, creds })
+  if (sourceMode) {
+    const { verifyGeminiManualRpc } = await import('./gemini-manual-rpc-test.mjs')
+    await verifyGeminiManualRpc(call)
+    const { verifyChannelCompatibility } = await import('./channel-compatibility-test.mjs')
+    await verifyChannelCompatibility({ adapters, outletState })
+    await verifySourceRegressions({ ctx, adapters, call, creds })
+  }
   await verifyChannelCreditsRpc({ ctx, call, creds, adapters, outletState })
   console.log('ok  实际渠道 RPC：七渠道仅账号池凭据即可查余额，ZCode 账号池回退及缺凭据反馈')
 
@@ -338,6 +344,88 @@ try {
   fs.rmSync(scratch, { recursive: true, force: true })
 }
 
+/**
+ * #850：上游「账号暂时无法使用相关服务」的临时风控停用。
+ *
+ * 验收口径（对齐 issue 提的四条）：
+ * 1. 200 + 流内错误帧的停用文案必须判成 `suspended`（2.8.9 落成 `client`，继续换号）；
+ * 2. `suspended` 与 `banned` 都不换号（换号会把同源账号一起打进风控）；
+ * 3. `suspended` 要落徽章，且恢复时刻取正文的「预计于 … (UTC+08:00) 恢复」，
+ *    不能退化成 1 小时兜底；
+ * 4. 判据是**共现**：缺主体/归因/后果的相似文案仍走旧的 `client` 行为。
+ */
+async function verifyLobsteraiSuspendedAccount() {
+  const errors = await import('../vendor/channel-pack/src/lobsterai-errors.ts')
+  const notice = '账号暂时无法使用相关服务，预计于 2026-11-18 11:08:21 (UTC+08:00) 恢复。'
+    + '请通过有道龙虾官方客户端或官网使用服务，勿通过第三方反向代理或插件转接、'
+    + '共享本账号的服务额度。再次出现异常使用可能导致永久停用。'
+
+  assert.equal(errors.classifyLobsteraiStreamError(notice), 'suspended', '#850 200+流内停用必须判 suspended')
+  assert.equal(errors.classifyLobsteraiError(200, notice), 'suspended', 'HTTP 200 走关键词分支也认得')
+  assert.equal(errors.classifyLobsteraiError(403, notice), 'suspended', '同一段文案换状态码也认得')
+  assert.equal(errors.classifyLobsteraiError(0, notice), 'suspended', '状态码未知（0）也认得')
+
+  assert.equal(errors.shouldRotateLobsteraiAccount('suspended'), false, '停用账号不再换号')
+  assert.equal(errors.shouldRotateLobsteraiAccount('banned'), false, '403 封号同样不换号')
+  assert.equal(errors.recordsLobsteraiRateLimit('suspended'), true, '解封时刻要落成徽章')
+  assert.equal(errors.recordsLobsteraiRateLimit('client'), false, '普通 client 不留徽章')
+
+  assert.equal(
+    errors.parseLobsteraiSuspendedResetAt(notice), 1794971301000,
+    '恢复时刻取正文（2026-11-18 11:08:21 UTC+08:00）',
+  )
+  // 抽不到时刻就返回 null 交给调用方兜底，绝不伪造一个时刻
+  assert.equal(errors.parseLobsteraiSuspendedResetAt('账号暂时无法使用相关服务，预计于稍后恢复'), null)
+
+  // 误判防护：缺任一层语义都不认，否则一次服务抖动就能让整个账号池停摆
+  for (const text of [
+    '服务暂时不可用，请稍后重试',
+    '该模型暂时无法使用相关服务',
+    '账号暂时无法使用相关服务，请稍后再试',
+    '不同账号共享本账号的服务额度时请谨慎',
+    '异常使用频率过高，请稍后再试',
+  ]) {
+    assert.equal(errors.classifyLobsteraiStreamError(text), 'client', `误判防护应保持 client: ${text}`)
+  }
+
+  // 既有分类不能被新判据挤掉
+  assert.equal(errors.classifyLobsteraiError(403, '账号存在异常行为，已被限制使用'), 'banned')
+  assert.equal(errors.classifyLobsteraiError(429, ''), 'soft-rate')
+  assert.equal(errors.classifyLobsteraiError(200, '免费额度已用完，请升级套餐'), 'hard-credit')
+  assert.equal(errors.shouldRotateLobsteraiAccount('hard-credit'), true, '额度耗尽仍应换号')
+  const { LobsteraiAdapter } = await import('../vendor/channel-pack/src/lobsterai-adapter.ts')
+  let requests = 0
+  const limits = []
+  const account = { id: 'first' }
+  const adapter = new LobsteraiAdapter({
+    resolveCredential: async () => ({ access_token: 'fixture' }),
+    resolveClientVersion: async () => '1.0',
+    refresh: () => assert.fail('unexpected refresh'),
+    accountPool: {
+      findAccountIdByCredential: async () => account.id,
+      findAccount: () => account,
+      getAvailableAccount: () => assert.fail('unexpected rotation to second account'),
+      updateModelRateLimit: async (...args) => {
+        limits.push(args)
+        if (args[3]) account.suspendedUntil = args[2]
+      },
+    },
+    fetchImpl: async () => {
+      requests++
+      const message = notice.replace('2026-11-18', '2099-11-18')
+      return new Response('data: ' + JSON.stringify({ error: { message } }) + '\n\n')
+    },
+  })
+  for (const model of ['deepseek-flash', 'another-model']) {
+    await assert.rejects(async () => {
+      for await (const chunk of adapter.stream({ model, messages: [] })) assert.fail(JSON.stringify(chunk))
+    }, { code: 'PERMISSION' })
+  }
+  assert.equal(requests, 1)
+  assert.deepEqual(limits, [['first', 'deepseek-flash', Date.parse('2099-11-18T11:08:21+08:00'), true]])
+  console.log('ok  lobsterai #850: 200+流内停用判 suspended、不换号、恢复时刻可解析，普通文案不误判')
+}
+
 async function verifySourceRegressions({ ctx, adapters, call, creds }) {
   const { verifyChannelQueueRotation } = await import('./channel-queue-rotation-test.mjs')
   await verifyChannelQueueRotation()
@@ -345,6 +433,7 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
   await verifyChannelPrFixes()
   await verifyLoopResumeEvents()
   await verifyGatewayToolCallFrames()
+  await verifyLobsteraiSuspendedAccount()
 
   // ── #681：探测分派表、候选链与耗时回传 ─────────────────────────────────
   //
@@ -905,14 +994,28 @@ async function verifySourceRegressions({ ctx, adapters, call, creds }) {
     const cutArgs = await collect(consume(response(frame({ tool_calls: [
       { index: 0, id: 'call-1', function: { name: 'read', arguments: '{"pattern": "un' } },
     ] }, 'tool_calls'))))
-    assert.equal(cutArgs.at(-1).reason.kind, 'max-tokens', `${provider}: an unclosed string is still a cut`)
+    assert.equal(cutArgs.at(-1).reason.kind, provider === 'trae' ? 'error' : 'max-tokens', `${provider}: a completed malformed tool is not a token limit`)
+    if (provider === 'trae') assert.equal(cutArgs.at(-1).reason.failure.code, 'TOOL_ARGUMENTS_INVALID')
     // A negative depth is the lost-prefix fragment (`"path.txt"}` — both
     // quotes present, the opening `{` lost) — still a cut, it belongs on the
     // proven retry path.
     const lostPrefix = await collect(consume(response(frame({ tool_calls: [
       { index: 0, id: 'call-1', function: { name: 'read', arguments: '"some/path.txt"}' } },
     ] }, 'tool_calls'))))
-    assert.equal(lostPrefix.at(-1).reason.kind, 'max-tokens', `${provider}: a lost-prefix fragment is still a cut`)
+    assert.equal(lostPrefix.at(-1).reason.kind, provider === 'trae' ? 'error' : 'max-tokens', `${provider}: completed malformed arguments retain their real cause`)
+    if (provider === 'trae') {
+      for (const args of ['{"workflow":{"node":1}', '{"workflow":{}</workflow><\uff5c\uff5cDSML\uff5c\uff5c parameter name="inputs">{}']) {
+        const make = finish => response(frame({ tool_calls: [{ index: 0, id: 'bad', function: { name: 'run', arguments: args } }] }, finish))
+        const malformed = await collect(consume(make('tool_calls')))
+        assert.equal(malformed.at(-1).reason.failure?.code, 'TOOL_ARGUMENTS_INVALID', '#745: a completed brace/markup error has its own failure')
+        assert.equal((await collect(consume(make('length')))).at(-1).reason.kind, 'max-tokens', '#745: explicit provider length remains authoritative')
+        assert.equal(assemble(malformed).find(block => block.type === 'tool-call')?.arguments, args, '#745: diagnostics never rewrite tool arguments')
+      }
+      const literalTags = '{"prompt":"keep <workflow> and <DSML> as literal text"}'
+      const legal = await collect(consume(response(frame({ tool_calls: [{ index: 0, id: 'legal', function: { name: 'run', arguments: literalTags } }] }, 'tool_calls'))))
+      assert.equal(legal.at(-1).reason.kind, 'tool-calls')
+      assert.equal(assemble(legal).find(block => block.type === 'tool-call')?.arguments, literalTags)
+    }
     const callDelta = { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'read', arguments: '{}' } }] }
     for (const rows of [
       [frame({ content: ' \n', ...callDelta }, 'tool_calls')],
