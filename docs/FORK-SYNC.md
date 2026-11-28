@@ -303,7 +303,6 @@ git config merge.ours.driver true
 
 - 记录时间：2026-11-28
 - 上游基线：`e72860e`（`docs: remember post-merge release signing (#958)`，v2.9.1）
-- `no-ads` 最新：`ce78a5c`（`fix: 清除合并带回的赞助商文案与广告弹窗测试兜底`），其前一次为合并提交 `187cce2`
 - 版本：`package.json` 为 `2.9.1`（与上游同版本，故不会触发应用内升级）
 - 控制台产物：已由合并后的源码重建（8 个本地资源），`build-standalone-ui --check` 通过
 - 广告自检：4.1 的全仓 grep 无输出；`client.js` 广告标识 0 处（上游同基线为 31 处）
