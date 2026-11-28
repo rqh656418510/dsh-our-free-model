@@ -15,6 +15,7 @@
 > git add -A -- packages/standalone/web
 > git commit -m "chore: 同步上游并重建控制台产物"
 > node scripts/build-standalone-ui.mjs --check && node scripts/client-lint.mjs
+> git grep -nE 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds|ofm-sponsor|SponsorNotice|SponsorPage' -- ':!docs'   # 必须无输出，见 4.1
 > git push origin no-ads
 > ```
 >
@@ -104,11 +105,66 @@ git log --oneline main ^upstream/main    # 应输出空；有输出就是 main �
 node scripts/build-standalone-ui.mjs --check   # 控制台产物与源码一致
 node scripts/client-lint.mjs                   # 文案字典、ofm_* 样式配平
 node scripts/standalone-frontend-test.mjs      # assets.json 与 web/ 目录一致
-grep -nE 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds' client.js
+node scripts/standalone-page-lifecycle-test.mjs
+node scripts/standalone-nav-test.mjs
 ```
 
-最后一条**必须没有输出**——它有输出就说明上游把广告代码合回来了（自动合并不报冲突，但内容可能回来）。
-PowerShell 下等价写法：`Select-String -Path client.js -Pattern 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds'`（应为空）。
+### 4.1 广告残留自检（最容易漏的一步）
+
+上游的广告有**三类落点**，只 grep `client.js` 会漏掉后两类，而且这两类**都不产生合并冲突**，
+git 会静默并入——合并命令返回成功不代表没有广告回来：
+
+| # | 落点 | 典型标识 | 只查 `client.js` |
+|---|------|----------|------------------|
+| 1 | `client.js`（插件浏览器半边） | `SponsorBanner`、`ofm_sponsor`、`SPONSOR_CARD_URL`、`showUrgentModal`、`urgentShownIds` | 能发现 |
+| 2 | 控制台前端与文案字典 | `frontend/i18n.mjs` 的 `nav.sponsor`、侧边栏 sponsor 菜单、`sponsor.tsx` 路由、`SponsorNotice` | **漏** |
+| 3 | UI 测试里的「等广告弹窗再关」兜底 | `scripts/*-ui-test.mjs` 的 `.ofm-sponsor-dialog` / `.ofm-sponsor-close` | **漏** |
+
+全仓检查（Git Bash，**必须无输出**）：
+
+```bash
+git grep -nE 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds|ofm-sponsor|SponsorNotice|SponsorPage' \
+  -- '*.js' '*.ts' '*.tsx' '*.mjs' '*.css' '*.json' ':!docs' ':!feed'
+```
+
+PowerShell 等价写法（也**必须无输出**）：
+
+```powershell
+Get-ChildItem -Recurse -File -Path packages,scripts,src,locale,client.js,index.js |
+  Where-Object { $_.FullName -notmatch 'node_modules' } |
+  Select-String -Pattern 'SponsorBanner|ofm_sponsor|SPONSOR_CARD_URL|showUrgentModal|urgentShownIds|ofm-sponsor|SponsorNotice|SponsorPage'
+```
+
+再查一遍**中文文案**（`赞助`/`赞助商`）。同样限定源码后缀——`*.md` 与二进制会误报
+（例如 `README.md` 里「无隶属、认可或赞助关系」是法律声明，`vendor/magpie/bin/*.exe` 是二进制）：
+
+```bash
+git grep -nE '赞助' -- '*.js' '*.ts' '*.tsx' '*.mjs' '*.css' '*.json' ':!docs' ':!feed'
+```
+
+`feed/announcements.json` 里的「赞助」是上游历史公告正文，属于运行时数据，可以保留。
+
+产物也要看一眼（i18n 字典会被打进 `app.js`）：
+
+```powershell
+Select-String -Path packages\standalone\web\app.js,packages\standalone\web\app.css -Pattern 'sponsor|Sponsor|赞助'
+```
+
+### 4.2 有输出怎么办
+
+按第 5 节删掉对应行或文件（`client.js` 见 5.3，前端与文案见 5.2/5.4），
+`npm run build:standalone-ui` 重建产物，再回到 4.1 重跑一次 grep，直到为空。
+
+> **案例（2026-11-28，同步上游 `e72860e` / v2.9.1）**
+>
+> 合并零冲突，`client.js` 也干净（上游 31 处标识一处都没回来），但静默带回了 3 处残留：
+>
+> 1. `packages/standalone/frontend/i18n.mjs`：`'nav.sponsor': '来自赞助商的广告'` / `'Sponsor spotlight'`
+>    —— 死键，没有 UI 引用，却会被编译进 `app.js` 产物；
+> 2. 同文件：`nav.groupSponsor` 被我们复用为「项目支持」分组标签，键名仍带广告语义，已改名 `nav.groupSupport`；
+> 3. `scripts/standalone-react-ui-test.mjs`：三行等待/关闭 `.ofm-sponsor-dialog` 的兜底逻辑。
+>
+> 清理提交：`ce78a5c`。这三处正是"自动合并不报冲突"的典型形态，所以 4.1 的检查要跑**全仓**而不是只看一个文件。
 
 另外 `node scripts/build-manifest.mjs --check` 会一直报 `client.js` 与清单不一致，这是**预期状态**（见第 7 节），不是合并出错。
 
@@ -240,8 +296,9 @@ git config merge.ours.driver true
 **修改**
 - `client.js`：去掉「北辰 API 中转站」横幅（组件/常量/中英文案/样式）；去掉 urgent 公告的全屏弹层（`showUrgentModal`、启动补弹、到达到达弹层），urgent 改为红色 toast；连带的文案键与 `.ofm_holdhint` 样式一并删除
 - `packages/standalone/frontend/app.tsx`、`components/shell.tsx`、`system/shell.css`：去掉侧边栏「来自赞助商的广告」菜单、`sponsor` 路由与每日弹窗挂载
+- `packages/standalone/frontend/i18n.mjs`：删除 `nav.sponsor` 文案键（中英两套字典），`nav.groupSponsor` 改名为 `nav.groupSupport`
 - `scripts/build-standalone-ui.mjs`、`scripts/test-all.mjs`：移除广告相关构建/套件登记
-- `scripts/*-ui-test.mjs`、`scripts/*-e2e*`：去掉"等广告弹窗再关"的兜底逻辑
+- `scripts/*-ui-test.mjs`、`scripts/*-e2e*`：去掉"等广告弹窗再关"的兜底逻辑（已落到 `scripts/standalone-react-ui-test.mjs`）
 - `src/feed.js`：`holdSeconds` 注释更新（字段仍归一化，客户端不再弹层）
 - `README.md`、`README_EN.md`：公告行为描述改为"标红 toast、不弹窗"
 
@@ -249,9 +306,10 @@ git config merge.ours.driver true
 
 ## 10. 当前状态快照
 
-- 记录时间：2026-11-25
-- 上游基线：`8f3182b`（`Merge pull request #926 …`）
-- `no-ads` 最新：`a1f80d8`（`Merge branch 'main' into no-ads`，已吸收上游上述基线）
-- 版本：`package.json` 仍为 `2.9.0`（与上游同版本，故不会触发应用内升级）
-- 控制台产物：已由合并后的源码重建，`build-standalone-ui --check` 通过
-- 待办：`git push origin no-ads`（合并提交尚未推送）
+- 记录时间：2026-11-28
+- 上游基线：`e72860e`（`docs: remember post-merge release signing (#958)`，v2.9.1）
+- `no-ads` 最新：`ce78a5c`（`fix: 清除合并带回的赞助商文案与广告弹窗测试兜底`），其前一次为合并提交 `187cce2`
+- 版本：`package.json` 为 `2.9.1`（与上游同版本，故不会触发应用内升级）
+- 控制台产物：已由合并后的源码重建（8 个本地资源），`build-standalone-ui --check` 通过
+- 广告自检：4.1 的全仓 grep 无输出；`client.js` 广告标识 0 处（上游同基线为 31 处）
+- 待办：`git push origin no-ads`（`origin/no-ads` 仍停在 `cd5f7b2`）
