@@ -43,7 +43,7 @@ const CORE_NAVIGATION: NavGroup[] = [
     { id: 'settings', name: t('nav.settings'), icon: Settings2 },
     { id: 'updates', name: t('nav.updates'), icon: RotateCw },
   ] },
-  ...(FEEDBACK_NAV.length > 0 ? [{ label: t('nav.groupSponsor'), items: FEEDBACK_NAV }] : []),
+  ...(FEEDBACK_NAV.length > 0 ? [{ label: t('nav.groupSupport'), items: FEEDBACK_NAV }] : []),
 ]
 
 const PAGE_ICONS: Record<string, NavIcon> = {
